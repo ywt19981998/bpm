@@ -1,0 +1,12 @@
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+.env
+.env.*
+*.log
+server.pid
+output/
+.playwright-cli/
+bpm-*.png
+bpm-*.json

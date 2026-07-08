@@ -1,0 +1,2046 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>选题策划报告工作台</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23d9f0ed'/%3E%3Cpath d='M10 7h9l4 4v14H10z' fill='none' stroke='%230f766e' stroke-width='2'/%3E%3Cpath d='M19 7v5h5M13 16h7M13 20h7' stroke='%230f766e' stroke-width='2'/%3E%3C/svg%3E">
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <style>
+    :root {
+      --page: #f6f7f6;
+      --surface: #ffffff;
+      --line: #d8ddd8;
+      --line-strong: #aeb8b0;
+      --text: #18201b;
+      --muted: #687168;
+      --soft: #edf2ee;
+      --teal: #0f766e;
+      --teal-soft: #d9f0ed;
+      --red: #c24136;
+      --red-soft: #fae7e4;
+      --amber: #a16207;
+      --amber-soft: #fff4d6;
+      --ink: #2d3530;
+      --shadow: 0 12px 32px rgba(31, 41, 35, 0.08);
+      --radius: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+      color: var(--text);
+      background: var(--page);
+      letter-spacing: 0;
+    }
+
+    button,
+    input,
+    textarea,
+    select {
+      font: inherit;
+    }
+
+    button {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      min-height: 36px;
+      border-radius: 6px;
+      padding: 0 12px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    button:hover {
+      border-color: var(--line-strong);
+      background: #f9fbf9;
+    }
+
+    .primary {
+      background: var(--teal);
+      border-color: var(--teal);
+      color: white;
+    }
+
+    .primary:hover {
+      background: #115e59;
+      border-color: #115e59;
+    }
+
+    .danger {
+      border-color: #f0b8b3;
+      color: var(--red);
+      background: #fffafa;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 248px minmax(560px, 1fr) 360px;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      background: #fbfcfb;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-height: 42px;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      background: var(--teal-soft);
+      display: grid;
+      place-items: center;
+      color: var(--teal);
+      border: 1px solid #b8dfd9;
+    }
+
+    .brand-title {
+      font-size: 16px;
+      font-weight: 700;
+    }
+
+    .brand-sub {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .project-switch {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 12px;
+    }
+
+    .project-name {
+      font-size: 15px;
+      font-weight: 700;
+      line-height: 1.35;
+    }
+
+    .project-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 6px;
+    }
+
+    .main-menu {
+      display: grid;
+      gap: 6px;
+    }
+
+    .menu-button {
+      justify-content: flex-start;
+      width: 100%;
+      border-color: transparent;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .menu-button.active {
+      background: var(--teal-soft);
+      color: var(--teal);
+      border-color: #c4e7e2;
+    }
+
+    .steps {
+      display: grid;
+      gap: 8px;
+    }
+
+    .step {
+      min-height: 42px;
+      display: grid;
+      grid-template-columns: 26px 1fr auto;
+      align-items: center;
+      gap: 8px;
+      padding: 8px;
+      border-radius: 6px;
+      color: var(--muted);
+    }
+
+    .step.active {
+      background: var(--teal-soft);
+      color: var(--teal);
+      font-weight: 700;
+    }
+
+    .step.done .step-dot {
+      background: var(--teal);
+      color: white;
+      border-color: var(--teal);
+    }
+
+    .step-dot {
+      width: 24px;
+      height: 24px;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      background: white;
+    }
+
+    .sidebar-actions {
+      margin-top: auto;
+      display: grid;
+      gap: 8px;
+    }
+
+    .main {
+      min-width: 0;
+      padding: 18px 22px 28px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .bpm-layout {
+      display: grid;
+      grid-template-columns: minmax(420px, 1fr) 360px;
+      gap: 14px;
+      align-items: start;
+    }
+
+    .bpm-stack {
+      display: grid;
+      gap: 14px;
+    }
+
+    .preview-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .author-strip {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #fbfcfb;
+      padding: 10px 12px;
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .author-strip i {
+      color: var(--teal);
+    }
+
+    .author-title {
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .author-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .author-badge {
+      border: 1px solid #c4e7e2;
+      background: var(--teal-soft);
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 700;
+      border-radius: 999px;
+      padding: 5px 9px;
+      white-space: nowrap;
+    }
+
+    .preview-item {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 9px 10px;
+      background: #fbfcfb;
+      min-width: 0;
+    }
+
+    .preview-label {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+
+    .preview-value {
+      font-size: 13px;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .job-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .job-card {
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fbfcfb;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .job-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .job-title {
+      font-weight: 800;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .job-meta,
+    .job-log {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .job-log {
+      white-space: pre-wrap;
+    }
+
+    .status-pill.small {
+      min-width: 58px;
+      height: 24px;
+      font-size: 11px;
+    }
+
+    .status-pill.done {
+      background: var(--teal-soft);
+      color: var(--teal);
+      border-color: #b8dfd9;
+    }
+
+    .status-pill.error {
+      background: var(--red-soft);
+      color: var(--red);
+      border-color: #f0b8b3;
+    }
+
+    .topbar {
+      min-height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .title-block h1 {
+      font-size: 22px;
+      line-height: 1.2;
+      margin: 0;
+    }
+
+    .title-block p {
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .top-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .file-strip {
+      border: 1px dashed var(--line-strong);
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 12px;
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) auto auto;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .quick-import {
+      border: 1px solid var(--line);
+      background: #fbfcfb;
+      border-radius: var(--radius);
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .quick-import-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .quick-import-title {
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .quick-import-sub {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .quick-files {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .quick-file {
+      border: 1px dashed var(--line-strong);
+      border-radius: 6px;
+      background: var(--surface);
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .quick-file .file-name {
+      font-size: 13px;
+    }
+
+    .file-info {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .file-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: var(--soft);
+      display: grid;
+      place-items: center;
+      color: var(--ink);
+      flex: 0 0 auto;
+    }
+
+    .file-name {
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .file-state {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 3px;
+    }
+
+    .hidden-file {
+      display: none;
+    }
+
+    .tabs {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(80px, 1fr));
+      gap: 6px;
+      background: #e9ede9;
+      padding: 6px;
+      border-radius: var(--radius);
+      border: 1px solid var(--line);
+    }
+
+    .tab {
+      min-height: 38px;
+      border-radius: 6px;
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      padding: 0 8px;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .tab.active {
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+      font-weight: 700;
+    }
+
+    .editor {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      min-height: 510px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      overflow: hidden;
+    }
+
+    .editor-head {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .section-title {
+      font-size: 18px;
+      font-weight: 800;
+      margin: 0;
+    }
+
+    .section-sub {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 4px;
+    }
+
+    .status-pill {
+      min-width: 72px;
+      height: 28px;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      background: var(--amber-soft);
+      color: var(--amber);
+      border: 1px solid #f2d98b;
+    }
+
+    .status-pill.confirmed {
+      background: var(--teal-soft);
+      color: var(--teal);
+      border-color: #b8dfd9;
+    }
+
+    .text-shell {
+      padding: 14px 16px;
+      min-height: 0;
+    }
+
+    textarea {
+      width: 100%;
+      height: 100%;
+      min-height: 370px;
+      resize: none;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+      line-height: 1.9;
+      color: var(--text);
+      background: #fff;
+      outline: none;
+    }
+
+    textarea:focus {
+      border-color: #79bdb5;
+      box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12);
+    }
+
+    .editor-foot {
+      padding: 12px 16px;
+      border-top: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .word-count {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .right {
+      border-left: 1px solid var(--line);
+      background: #fbfcfb;
+      padding: 18px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-width: 0;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 12px;
+    }
+
+    .panel-title {
+      font-size: 14px;
+      font-weight: 800;
+      margin: 0 0 10px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .score-total {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: end;
+      gap: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 10px;
+    }
+
+    .score-num {
+      font-size: 34px;
+      font-weight: 800;
+      color: var(--teal);
+      line-height: 1;
+    }
+
+    .score-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .score-table th,
+    .score-table td {
+      padding: 7px 4px;
+      border-bottom: 1px solid #eef0ee;
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    .score-table th:nth-child(2),
+    .score-table th:nth-child(3),
+    .score-table td:nth-child(2),
+    .score-table td:nth-child(3) {
+      text-align: right;
+      width: 44px;
+    }
+
+    .score-input {
+      width: 50px;
+      height: 28px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      text-align: right;
+      padding: 0 6px;
+      background: #fff;
+    }
+
+    .preview-frame {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: #f1f3f1;
+      height: 320px;
+      overflow: hidden;
+      display: grid;
+      place-items: center;
+    }
+
+    .preview-frame img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    .pending-list {
+      display: grid;
+      gap: 8px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .pending-list li {
+      display: grid;
+      grid-template-columns: 20px 1fr;
+      gap: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .model-form {
+      display: grid;
+      gap: 10px;
+    }
+
+    .model-form label {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .model-form input {
+      width: 100%;
+      min-height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 10px;
+      color: var(--text);
+      background: white;
+    }
+
+    .preview-empty {
+      display: grid;
+      gap: 8px;
+      place-items: center;
+      color: var(--muted);
+      font-size: 13px;
+      padding: 24px;
+      text-align: center;
+    }
+
+    .progress-panel {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 12px;
+    }
+
+    .progress-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+
+    .progress-track {
+      height: 8px;
+      border-radius: 999px;
+      background: #e5ebe6;
+      overflow: hidden;
+    }
+
+    .progress-bar {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--teal);
+      transition: width 260ms ease;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      background: var(--ink);
+      color: white;
+      border-radius: 8px;
+      padding: 12px 14px;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(12px);
+      transition: opacity 160ms ease, transform 160ms ease;
+      pointer-events: none;
+      font-size: 13px;
+      z-index: 10;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 1160px) {
+      .app {
+        grid-template-columns: 220px minmax(520px, 1fr);
+      }
+
+      .right {
+        grid-column: 1 / -1;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+        display: grid;
+        grid-template-columns: 1fr 1fr 1fr;
+      }
+
+      .bpm-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 840px) {
+      .app {
+        display: block;
+      }
+
+      .sidebar,
+      .right {
+        border: 0;
+      }
+
+      .main {
+        padding: 14px;
+      }
+
+      .topbar,
+      .editor-foot,
+      .file-strip {
+        align-items: stretch;
+        grid-template-columns: 1fr;
+        flex-direction: column;
+      }
+
+      .tabs {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .right {
+        display: grid;
+        grid-template-columns: 1fr;
+      }
+
+      .preview-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .quick-files {
+        grid-template-columns: 1fr;
+      }
+
+      .editor-foot .top-actions {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        width: 100%;
+        gap: 6px;
+      }
+
+      .editor-foot .top-actions button {
+        padding: 0 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark"><i data-lucide="file-text"></i></div>
+        <div>
+          <div class="brand-title">策划报告工作台</div>
+          <div class="brand-sub">教育出版板块</div>
+        </div>
+      </div>
+
+      <nav class="main-menu">
+        <button class="menu-button active" id="menuReport"><i data-lucide="file-pen-line" size="16"></i>策划报告</button>
+        <button class="menu-button" id="menuBpm"><i data-lucide="workflow" size="16"></i>BPM 填报</button>
+      </nav>
+
+      <div class="project-switch">
+        <div class="project-name" id="projectName">新建选题</div>
+        <div class="project-meta" id="projectMeta">等待上传选题申报表</div>
+      </div>
+
+      <div class="steps">
+        <div class="step active" id="step1">
+          <span class="step-dot">1</span>
+          <span>申报表解析</span>
+          <span></span>
+        </div>
+        <div class="step" id="step2">
+          <span class="step-dot">2</span>
+          <span>报告编辑</span>
+          <span></span>
+        </div>
+        <div class="step" id="step3">
+          <span class="step-dot">3</span>
+          <span>评分确认</span>
+          <span></span>
+        </div>
+        <div class="step" id="step4">
+          <span class="step-dot">4</span>
+          <span>模板导出</span>
+          <span></span>
+        </div>
+      </div>
+
+      <div class="sidebar-actions">
+        <button id="saveDraft"><i data-lucide="save" size="16"></i>保存草稿</button>
+        <button><i data-lucide="history" size="16"></i>版本记录</button>
+      </div>
+    </aside>
+
+    <main class="main" id="reportView">
+      <div class="topbar">
+        <div class="title-block">
+          <h1>选题策划报告</h1>
+          <p>上传申报表后生成一到六部分，正文段落默认首行空两格。</p>
+        </div>
+        <div class="top-actions">
+          <button><i data-lucide="settings-2" size="16"></i>规则</button>
+          <button class="primary" id="exportDocx"><i data-lucide="download" size="16"></i>导出 DOCX</button>
+        </div>
+      </div>
+
+      <section class="file-strip">
+        <div class="file-info">
+          <div class="file-icon"><i data-lucide="file-up"></i></div>
+          <div>
+            <div class="file-name" id="fileName">请上传选题申报表 .docx</div>
+            <div class="file-state" id="fileState">等待上传</div>
+          </div>
+        </div>
+        <label>
+          <input class="hidden-file" id="fileInput" type="file" accept=".docx">
+          <button type="button" id="chooseFile"><i data-lucide="upload" size="16"></i>选择文件</button>
+        </label>
+        <button id="generateAll"><i data-lucide="sparkles" size="16"></i>生成全部</button>
+      </section>
+
+      <section class="quick-import">
+        <div class="quick-import-head">
+          <div>
+            <div class="quick-import-title">快速填 BPM</div>
+            <div class="quick-import-sub">同时上传申报表和已确认的选题策划报告，跳过模型生成，直接准备 BPM 字段。</div>
+          </div>
+          <button class="primary" id="importBpmSources"><i data-lucide="files" size="16"></i>解析并进入 BPM</button>
+        </div>
+        <div class="quick-files">
+          <label class="quick-file">
+            <input class="hidden-file" id="quickApplicationInput" type="file" accept=".docx">
+            <div class="file-info">
+              <div class="file-icon"><i data-lucide="file-input"></i></div>
+              <div>
+                <div class="file-name" id="quickApplicationName">选择选题申报表 .docx</div>
+                <div class="file-state" id="quickApplicationState">提供作者和基础字段</div>
+              </div>
+            </div>
+            <button type="button" id="chooseQuickApplication"><i data-lucide="upload" size="16"></i>选择申报表</button>
+          </label>
+          <label class="quick-file">
+            <input class="hidden-file" id="quickReportInput" type="file" accept=".docx">
+            <div class="file-info">
+              <div class="file-icon"><i data-lucide="file-check-2"></i></div>
+              <div>
+                <div class="file-name" id="quickReportName">选择选题策划报告 .docx</div>
+                <div class="file-state" id="quickReportState">提供一到六正文和评分</div>
+              </div>
+            </div>
+            <button type="button" id="chooseQuickReport"><i data-lucide="upload" size="16"></i>选择策划报告</button>
+          </label>
+        </div>
+      </section>
+
+      <section class="author-strip" id="authorStrip">
+        <i data-lucide="user-round-check" size="18"></i>
+        <div>
+          <div class="author-title" id="authorTitle">作译者信息待提取</div>
+          <div class="author-meta" id="authorMeta">上传申报表并生成后，将自动准备 BPM 新增作译者数据。</div>
+        </div>
+        <div class="author-badge" id="authorBadge">等待</div>
+      </section>
+
+      <section class="progress-panel" id="progressPanel" hidden>
+        <div class="progress-top">
+          <span id="progressText">正在分析申报表并生成策划报告...</span>
+          <span id="progressPercent">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+      </section>
+
+      <nav class="tabs" id="tabs"></nav>
+
+      <section class="editor">
+        <div class="editor-head">
+          <div>
+            <h2 class="section-title" id="sectionTitle"></h2>
+            <div class="section-sub" id="sectionSub"></div>
+          </div>
+          <span class="status-pill" id="sectionStatus">待确认</span>
+        </div>
+        <div class="text-shell">
+          <textarea id="sectionText" spellcheck="false"></textarea>
+        </div>
+        <div class="editor-foot">
+          <div class="word-count" id="wordCount">0 字</div>
+          <div class="top-actions">
+            <button id="indentText"><i data-lucide="indent-increase" size="16"></i>首行两格</button>
+            <button id="polishText"><i data-lucide="wand-2" size="16"></i>润色</button>
+            <button id="confirmText" class="primary"><i data-lucide="check-circle-2" size="16"></i>确认本段</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <main class="main" id="bpmView" hidden>
+      <div class="topbar">
+        <div class="title-block">
+          <h1>BPM 填报任务</h1>
+          <p>先核对将写入 BPM 的字段，再加入队列；后台一次只处理一个暂存任务。</p>
+        </div>
+        <div class="top-actions">
+          <button id="refreshBpmJobs"><i data-lucide="refresh-cw" size="16"></i>刷新任务</button>
+          <button class="primary" id="queueBpm"><i data-lucide="send" size="16"></i>加入队列</button>
+        </div>
+      </div>
+
+      <section class="progress-panel" id="bpmProgressPanel" hidden>
+        <div class="progress-top">
+          <span id="bpmProgressText">正在加入 BPM 队列...</span>
+          <span id="bpmProgressPercent">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-bar" id="bpmProgressBar"></div>
+        </div>
+      </section>
+
+      <div class="bpm-layout">
+        <div class="bpm-stack">
+          <section class="panel">
+            <h3 class="panel-title"><i data-lucide="clipboard-check" size="16"></i>填报预览</h3>
+            <div class="preview-grid" id="bpmPreview"></div>
+          </section>
+
+          <section class="panel">
+            <h3 class="panel-title"><i data-lucide="list-checks" size="16"></i>任务日志</h3>
+            <div class="job-list" id="bpmJobs">
+              <div class="preview-empty">暂无 BPM 任务</div>
+            </div>
+          </section>
+        </div>
+
+        <aside class="bpm-stack">
+          <section class="panel">
+            <h3 class="panel-title"><i data-lucide="key-round" size="16"></i>BPM 登录</h3>
+            <div class="model-form">
+              <label>
+                <span>BPM 地址</span>
+                <input id="bpmUrl" type="url" value="http://bpm.phei.com.cn:8088/portal/r/w">
+              </label>
+	              <label>
+	                <span>账号</span>
+	                <input id="bpmUser" type="text" placeholder="输入自己的 BPM 账号">
+	              </label>
+	              <label>
+	                <span>姓名</span>
+	                <input id="bpmEditorName" type="text" value="叶文涛" placeholder="用于报告命名和责任编辑">
+	              </label>
+	              <label>
+	                <span>密码</span>
+	                <input id="bpmPassword" type="password" placeholder="仅本次使用，不保存">
+              </label>
+              <div class="file-state" id="bpmStatus">加入队列后会创建 BPM 选题申报草稿，不会办理提交。</div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h3 class="panel-title"><i data-lucide="shield-check" size="16"></i>队列规则</h3>
+            <ul class="pending-list">
+              <li><i data-lucide="circle-alert" size="16"></i><span>六段正文必须全部确认后才能加入队列。</span></li>
+              <li><i data-lucide="circle-alert" size="16"></i><span>密码只在本次任务内使用，不写入任务日志。</span></li>
+              <li><i data-lucide="circle-alert" size="16"></i><span>队列只暂存草稿，不点击 BPM 办理提交。</span></li>
+            </ul>
+          </section>
+        </aside>
+      </div>
+    </main>
+
+    <aside class="right">
+      <section class="panel">
+        <h3 class="panel-title"><i data-lucide="bot" size="16"></i>模型配置</h3>
+        <div class="model-form">
+          <label>
+            <span>模型 URL</span>
+            <input id="modelUrl" type="url" value="https://api.deepseek.com" placeholder="https://api.example.com/v1/chat/completions">
+          </label>
+          <label>
+            <span>模型名称</span>
+            <input id="modelName" type="text" value="deepseek-v4-flash" placeholder="gpt-4.1 / qwen-plus / deepseek-chat">
+          </label>
+          <label>
+            <span>API Key</span>
+            <input id="apiKey" type="password" placeholder="可临时填写；或用 DEEPSEEK_API_KEY 启动服务">
+          </label>
+          <button id="saveModel"><i data-lucide="key-round" size="15"></i>保存配置</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title"><i data-lucide="gauge" size="16"></i>建议评分</h3>
+        <div class="score-total">
+          <div>
+            <div class="project-meta">自评总分</div>
+            <div class="score-num" id="scoreTotal">67</div>
+          </div>
+          <button id="recalcScore"><i data-lucide="refresh-cw" size="15"></i>重算</button>
+        </div>
+        <table class="score-table">
+          <thead>
+            <tr>
+              <th>评分项</th>
+              <th>满分</th>
+              <th>建议</th>
+            </tr>
+          </thead>
+          <tbody id="scoreRows"></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title"><i data-lucide="file-search" size="16"></i>DOCX 预览</h3>
+        <div class="preview-frame">
+          <div class="preview-empty" id="previewEmpty">
+            <i data-lucide="file-output" size="28"></i>
+            <span>导出后显示 DOCX 预览</span>
+          </div>
+          <img id="previewImage" src="assets/report-preview.png" alt="导出的选题策划报告首页预览" hidden>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3 class="panel-title"><i data-lucide="list-checks" size="16"></i>待确认信息</h3>
+        <ul class="pending-list" id="pendingList">
+          <li><i data-lucide="circle-alert" size="16"></i><span>定价、版税率、发货折扣、首印数。</span></li>
+          <li><i data-lucide="circle-alert" size="16"></i><span>出版资助、包销册数和预计毛利润。</span></li>
+          <li><i data-lucide="circle-alert" size="16"></i><span>数字资源授权范围和维护周期。</span></li>
+        </ul>
+      </section>
+    </aside>
+  </div>
+
+  <div class="toast" id="toast">已保存</div>
+
+  <script>
+    const sections = [
+      {
+        key: "content",
+        tab: "一",
+        short: "内容",
+        title: "一、选题内容",
+        sub: "出版导向、出版定位、内容简介、内容创新及版权许可等",
+        confirmed: false,
+        text: "　　本选题坚持正确的政治方向、出版导向和价值取向，依据教育部《医药类专业大学物理课程教学基本要求》（2021年版）编写，面向医药类专业本科教学需求，服务新医科建设、医工交叉人才培养和医学基础课程改革。选题定位为面向临床医学、医学影像学、生物医学工程、药学等专业的本科公共基础课程教材，兼顾长学制医学生及相关教学科研人员参考使用。\n\n　　全书以“医工深度融合、应用导向重构”为核心理念，预计约300千字，共三篇十五章，系统涵盖力学与生物力学基础、电磁学与医用电工学、光学与近代物理及医学影像三大知识板块。教材从“物理学与现代医学”的关系入手，将力学、电磁学、光学、原子核物理、X射线、磁共振成像等基础内容与医学诊断、治疗、检测和医学工程场景结合，形成从基础原理到临床应用的完整知识链条。\n\n　　本书创新点主要体现在三方面：一是突出医工融合，每章以临床案例导学，将抽象物理原理与医学应用场景深度绑定；二是采用“核心必学—选学拓展—应用拓展”的分层编排方式，便于不同专业、不同学时灵活选用；三是建设新形态教材资源，关键知识点配讲解视频和动画演示，形成“纸质+数字”一体化智慧学习环境。"
+      },
+      {
+        key: "author",
+        tab: "二",
+        short: "作者",
+        title: "二、作者情况",
+        sub: "第一作者及团队情况",
+        confirmed: false,
+        text: "　　第一作者周丽丽，赣南医科大学教授，博士毕业于湖南大学凝聚态物理专业，现从事材料科学及医学物理相关教学科研工作。作者长期承担“医用物理学”“普通物理学”“医学影像原理与设备”等本科课程教学，其中“医用物理学”自2011年至今持续授课，具有较扎实的课程建设经验和面向医药类专业学生的教学实践积累。\n\n　　作者具有较好的教材建设和课程改革基础，已出版《医用物理学》《医用物理学实验指导》《现代医学物理》等教材或著作，并参与国家基金评审、期刊论文评审等学术工作。本书参编团队主要来自赣南医科大学，成员职称结构覆盖教授、副教授和讲师，分工较明确，具备完成本教材编写和后续教学推广的基础。"
+      },
+      {
+        key: "feasibility",
+        tab: "三",
+        short: "可行性",
+        title: "三、策划过程与可行性",
+        sub: "选题来源及策划思路、选题把控能力及出版进度等",
+        confirmed: false,
+        text: "　　本选题来源于医药类专业大学物理课程教学改革的实际需求。传统医学物理教材通常重视知识体系完整性，但在临床问题导入、医学工程应用、分层教学设计和数字化资源支撑方面仍有进一步优化空间。本书围绕这一教学痛点，将医学物理基础课程从“知识讲授型”进一步转向“应用理解型”和“医工融合型”。\n\n　　从进度看，申报表中已列明2026年6月完成大纲，2026年8月完成书稿，2026年9月完成审定并交出版社，计划2027年6月出版、2027年7月见样书、2027年9月供大一新生开课使用。作者团队分工已明确，课程资源和教学基础较充分，整体具备推进选题出版的可行性。"
+      },
+      {
+        key: "award",
+        tab: "四",
+        short: "获奖",
+        title: "四、获奖潜质",
+        sub: "获奖预期及版权输出等",
+        confirmed: false,
+        text: "　　本书面向医药类本科公共基础课程，具有较明确的课程适配场景和教学改革基础。教材以医工融合为主线，兼顾课程思政、新形态资源建设、虚拟仿真实验和临床案例导入，符合当前医学教育改革和新医科建设方向。若后续在教学课件、在线题库、习题解析、实验指导、案例资源和数字资源方面形成系统配套，具备进一步培育为校级、省级优质教材或新形态教材建设成果的潜力。\n\n　　版权输出方面，本书以国内医药类本科教学为主要对象，短期以中文教材推广和数字资源建设为主，后续可根据使用反馈再评估数字课程、资源包授权或区域教学共同体推广空间。"
+      },
+      {
+        key: "profit",
+        tab: "五",
+        short: "成本",
+        title: "五、成本与盈利估算",
+        sub: "成本收益测算、资助与包销等",
+        confirmed: false,
+        text: "　　（一）纸质教材\n　　1.出版规格\n　　（1）版权字数： 350 千字。\n　　（2）印张： 14。\n　　（3）正文印刷色数：  单色。\n\n　　2.盈利估算\n　　（1）定价：  59.8  元。\n　　（2）版税（率）：  8%。\n　　（3）发货折扣：    65%。\n　　（4）预估首印数：   1200册。\n　　（5）预估总印数：   3000册。\n　　（6）包销册数：     0册；包销折扣： 0 %。\n　　（7）出版资助：   \n　　（8）预计总毛利润：   "
+      },
+      {
+        key: "marketing",
+        tab: "六",
+        short: "营销",
+        title: "六、市场定位与营销",
+        sub: "目标读者、竞品比较、营销渠道、配套资源等",
+        confirmed: false,
+        text: "　　本书目标读者定位较清晰，主要面向临床医学、医学影像学、生物医学工程、预防医学、药学等专业本科生，也可供长学制医学生、医学物理相关课程教师及教学科研人员参考。教材适用于本科层次公共课或专业基础课程，总学时80学时，其中理论60学时、实验20学时，可服务于医学院校医学物理学、医用物理学及相关课程建设。\n\n　　在竞品层面，人民卫生出版社等已有《医学物理学》教材体系成熟、内容全面，具有较强的课程基础性。本书的市场差异化主要在于：以“医工深度融合、应用导向重构”为核心理念，突出临床案例导学和医学工程应用；采用分层教学结构，便于不同专业按核心内容和拓展内容灵活取舍；强调新形态资源建设，通过视频、动画、二维码资源、在线题库和习题解析增强教学服务能力。\n\n　　营销方面，可优先依托作者所在课程团队的教学基础和本校年用量，形成稳定首批使用场景；同时面向医学院校相关专业开展样书寄送、课程负责人沟通和教师试用反馈。"
+      }
+    ];
+
+    const scoreItems = [
+      ["选题内容", 35, 0],
+      ["作者情况", 10, 0],
+      ["策划过程与可行性", 5, 0],
+      ["获奖潜质", 5, 0],
+      ["成本与盈利估算", 35, 0],
+      ["市场定位与营销", 10, 0]
+    ];
+
+    let activeIndex = 0;
+    let uploadedFile = null;
+    let quickApplicationFile = null;
+    let quickReportFile = null;
+    let docxExported = false;
+    let bpmTopic = null;
+    let authorMaintenance = null;
+    const draftKey = "phei-report-draft-v2";
+    const tabs = document.getElementById("tabs");
+    const sectionTitle = document.getElementById("sectionTitle");
+    const sectionSub = document.getElementById("sectionSub");
+    const sectionText = document.getElementById("sectionText");
+    const sectionStatus = document.getElementById("sectionStatus");
+    const wordCount = document.getElementById("wordCount");
+    const toast = document.getElementById("toast");
+    const scoreRows = document.getElementById("scoreRows");
+    const scoreTotal = document.getElementById("scoreTotal");
+    const progressPanel = document.getElementById("progressPanel");
+    const progressBar = document.getElementById("progressBar");
+    const progressText = document.getElementById("progressText");
+    const progressPercent = document.getElementById("progressPercent");
+    const pendingList = document.getElementById("pendingList");
+    const bpmStatus = document.getElementById("bpmStatus");
+    const reportView = document.getElementById("reportView");
+    const bpmView = document.getElementById("bpmView");
+    const bpmPreview = document.getElementById("bpmPreview");
+    const bpmJobs = document.getElementById("bpmJobs");
+    const bpmProgressPanel = document.getElementById("bpmProgressPanel");
+    const bpmProgressBar = document.getElementById("bpmProgressBar");
+    const bpmProgressText = document.getElementById("bpmProgressText");
+    const bpmProgressPercent = document.getElementById("bpmProgressPercent");
+    const authorTitle = document.getElementById("authorTitle");
+    const authorMeta = document.getElementById("authorMeta");
+    const authorBadge = document.getElementById("authorBadge");
+
+    sections.forEach((section) => {
+      section.text = "";
+      section.confirmed = false;
+    });
+
+    let progressTimer = null;
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      window.setTimeout(() => toast.classList.remove("show"), 1400);
+    }
+
+    function setProgress(value, message) {
+      progressPanel.hidden = false;
+      progressBar.style.width = `${value}%`;
+      progressPercent.textContent = `${value}%`;
+      if (message) progressText.textContent = message;
+    }
+
+    function startProgress() {
+      let value = 8;
+      setProgress(value, "正在上传并解析申报表...");
+      clearInterval(progressTimer);
+      progressTimer = setInterval(() => {
+        value = Math.min(88, value + Math.ceil(Math.random() * 7));
+        const message = value < 35
+          ? "正在读取 Word 表格字段..."
+          : value < 65
+            ? "正在按 skill 组织提示词..."
+            : "模型正在生成一到六部分和评分...";
+        setProgress(value, message);
+      }, 650);
+    }
+
+    function finishProgress(message) {
+      clearInterval(progressTimer);
+      setProgress(100, message || "生成完成");
+      window.setTimeout(() => {
+        progressPanel.hidden = true;
+        progressBar.style.width = "0%";
+      }, 900);
+    }
+
+    function failProgress(message) {
+      clearInterval(progressTimer);
+      setProgress(100, message || "生成失败");
+      progressBar.style.background = "var(--red)";
+      window.setTimeout(() => {
+        progressPanel.hidden = true;
+        progressBar.style.width = "0%";
+        progressBar.style.background = "var(--teal)";
+      }, 1800);
+    }
+
+    function setBpmProgress(value, message) {
+      bpmProgressPanel.hidden = false;
+      bpmProgressBar.style.width = `${value}%`;
+      bpmProgressPercent.textContent = `${value}%`;
+      if (message) bpmProgressText.textContent = message;
+    }
+
+    function finishBpmProgress(message) {
+      setBpmProgress(100, message || "已加入队列");
+      window.setTimeout(() => {
+        bpmProgressPanel.hidden = true;
+        bpmProgressBar.style.width = "0%";
+      }, 900);
+    }
+
+    function failBpmProgress(message) {
+      setBpmProgress(100, message || "加入队列失败");
+      bpmProgressBar.style.background = "var(--red)";
+      window.setTimeout(() => {
+        bpmProgressPanel.hidden = true;
+        bpmProgressBar.style.width = "0%";
+        bpmProgressBar.style.background = "var(--teal)";
+      }, 1600);
+    }
+
+    function switchMainView(view) {
+      const isBpm = view === "bpm";
+      reportView.hidden = isBpm;
+      bpmView.hidden = !isBpm;
+      document.getElementById("menuReport").classList.toggle("active", !isBpm);
+      document.getElementById("menuBpm").classList.toggle("active", isBpm);
+      if (isBpm) {
+        saveActiveText();
+        renderBpmPreview();
+        refreshBpmJobs();
+      }
+      if (window.lucide) window.lucide.createIcons();
+    }
+
+    function renderPending(items) {
+      pendingList.innerHTML = "";
+      const list = items && items.length ? items : ["定价、版税率、发货折扣、首印数。", "出版资助、包销册数和预计毛利润。", "数字资源授权范围和维护周期。"];
+      list.forEach((item) => {
+        const li = document.createElement("li");
+        li.innerHTML = `<i data-lucide="circle-alert" size="16"></i><span>${item}</span>`;
+        pendingList.appendChild(li);
+      });
+      if (window.lucide) window.lucide.createIcons();
+    }
+
+    function renderAuthorStatus(author) {
+      authorMaintenance = author || null;
+      if (!author) {
+        authorTitle.textContent = "作译者信息待提取";
+        authorMeta.textContent = "上传申报表并生成后，将自动准备 BPM 新增作译者数据。";
+        authorBadge.textContent = "等待";
+        return;
+      }
+      const name = author.name || "待识别";
+      const unit = author.workUnit && author.workUnit.trim() ? author.workUnit : "单位待识别";
+      const status = author.bioStatus || (author.bio && author.bio.trim() ? "已准备" : "待补全失败");
+      authorTitle.textContent = `作译者：${name}`;
+      authorMeta.textContent = `工作单位：${unit}；BPM 填报时会先新增作译者，再填选题申报。`;
+      authorBadge.textContent = status;
+    }
+
+    function setWorkflowStep(activeStep, doneSteps = []) {
+      [1, 2, 3, 4].forEach((num) => {
+        const step = document.getElementById(`step${num}`);
+        const dot = step.querySelector(".step-dot");
+        step.classList.toggle("active", num === activeStep);
+        step.classList.toggle("done", doneSteps.includes(num));
+        if (doneSteps.includes(num)) {
+          dot.innerHTML = '<i data-lucide="check" size="14"></i>';
+        } else {
+          dot.textContent = String(num);
+        }
+      });
+      if (window.lucide) window.lucide.createIcons();
+    }
+
+    function updateWorkflowByState(exported = false) {
+      if (exported || docxExported) {
+        setWorkflowStep(4, [1, 2, 3, 4]);
+        return;
+      }
+      const hasGeneratedText = sections.some((section) => section.text.trim());
+      const allConfirmed = sections.every((section) => section.confirmed && section.text.trim());
+      if (allConfirmed) {
+        setWorkflowStep(3, [1, 2]);
+      } else if (hasGeneratedText) {
+        setWorkflowStep(2, [1]);
+      } else if (uploadedFile) {
+        setWorkflowStep(1, []);
+      } else {
+        setWorkflowStep(1, []);
+      }
+    }
+
+    function updateWordCount() {
+      const count = sectionText.value.replace(/\s/g, "").length;
+      wordCount.textContent = `${count} 字`;
+    }
+
+    function renderTabs() {
+      tabs.innerHTML = "";
+      sections.forEach((section, index) => {
+        const button = document.createElement("button");
+        button.className = `tab${index === activeIndex ? " active" : ""}`;
+        button.textContent = `${section.tab} ${section.short}`;
+        button.addEventListener("click", () => {
+          saveActiveText();
+          activeIndex = index;
+          render();
+        });
+        tabs.appendChild(button);
+      });
+    }
+
+    function renderEditor() {
+      const section = sections[activeIndex];
+      sectionTitle.textContent = section.title;
+      sectionSub.textContent = section.sub;
+      sectionText.value = section.text;
+      sectionText.placeholder = "上传申报表并生成后，这里会出现本段草稿。也可以直接在这里手动输入。";
+      sectionStatus.textContent = section.confirmed ? "已确认" : "待确认";
+      sectionStatus.classList.toggle("confirmed", section.confirmed);
+      updateWordCount();
+    }
+
+    function renderScores() {
+      scoreRows.innerHTML = "";
+      scoreItems.forEach((item) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td>${item[0]}</td>
+          <td>${item[1]}</td>
+          <td><input class="score-input" type="number" min="0" max="${item[1]}" value="${item[2]}" aria-label="${item[0]}建议分"></td>
+        `;
+        const input = tr.querySelector("input");
+        input.addEventListener("input", () => {
+          item[2] = Math.max(0, Math.min(item[1], Number(input.value || 0)));
+          input.value = item[2];
+          updateScoreTotal();
+        });
+        scoreRows.appendChild(tr);
+      });
+      updateScoreTotal();
+    }
+
+    function updateScoreTotal() {
+      const total = scoreItems.reduce((sum, item) => sum + Number(item[2] || 0), 0);
+      scoreTotal.textContent = total;
+      updateWorkflowByState();
+    }
+
+    function render() {
+      renderTabs();
+      renderEditor();
+      if (!scoreRows.children.length) renderScores();
+      updateWorkflowByState();
+      if (window.lucide) window.lucide.createIcons();
+    }
+
+    function saveActiveText() {
+      sections[activeIndex].text = sectionText.value;
+    }
+
+    function stripIndent(text) {
+      return (text || "").replace(/^[　\s]+/gm, "").replace(/\n{3,}/g, "\n\n").trim();
+    }
+
+    function truncateText(text, limit = 1000) {
+      const clean = stripIndent(text);
+      return clean.length > limit ? `${clean.slice(0, limit - 1)}…` : clean;
+    }
+
+    function bpmEditorName() {
+      return (document.getElementById("bpmEditorName")?.value || "叶文涛").trim() || "叶文涛";
+    }
+
+    function formatChineseDate(date = new Date()) {
+      return `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日`;
+    }
+
+    function safeFilePart(text) {
+      return String(text || "选题策划报告").replace(/[\\/:*?"<>|]+/g, "_").trim() || "选题策划报告";
+    }
+
+    function reportFileName(title, editorName) {
+      const cleanTitle = safeFilePart(title || "选题策划报告");
+      const wrappedTitle = cleanTitle.startsWith("《") && cleanTitle.endsWith("》") ? cleanTitle : `《${cleanTitle}》`;
+      return `${wrappedTitle}选题策划报告（高等教育出版分社+${safeFilePart(editorName || bpmEditorName())}+${formatChineseDate()}）.docx`;
+    }
+
+    function sectionTextByKey(key) {
+      const section = sections.find((item) => item.key === key);
+      return stripIndent(section ? section.text : "");
+    }
+
+    function scoreMapForBpm() {
+      const names = {
+        "选题内容": "scoreContent",
+        "作者情况": "scoreAuthor",
+        "策划过程与可行性": "scoreFeasibility",
+        "获奖潜质": "scoreAward",
+        "成本与盈利估算": "scoreProfit",
+        "市场定位与营销": "scoreMarketing"
+      };
+      const result = {};
+      scoreItems.forEach((item) => {
+        if (names[item[0]]) result[names[item[0]]] = Number(item[2] || 0);
+      });
+      result.scoreTotal = scoreItems.reduce((sum, item) => sum + Number(item[2] || 0), 0);
+      return result;
+    }
+
+	    function currentBpmTopic() {
+	      const title = document.getElementById("projectName").textContent || "选题策划报告";
+	      const topic = { ...(bpmTopic || {}) };
+	      topic.class1 = "02";
+	      topic.class2 = "0201";
+	      topic.gbClass = "G";
+	      topic.readLevel = "高等理工";
+		      topic.class3 = topic.class3 || "020101";
+		      topic.class4 = topic.class4 || "02010103";
+	      topic.projectEditor = bpmEditorName();
+	      topic.editor = bpmEditorName();
+		      topic.bookName = title.replace(/[\\/:*?"<>|]+/g, "_").trim() || "选题策划报告";
+	      topic.brief = truncateText(topic.brief || sectionTextByKey("content"));
+      topic.reader = truncateText(topic.reader || sectionTextByKey("marketing"));
+      topic.feature = truncateText(topic.feature || sectionTextByKey("content"));
+      topic.compare = truncateText(topic.compare || sectionTextByKey("marketing"));
+      if (authorMaintenance || topic.authorMaintenance) {
+        topic.authorMaintenance = { ...(topic.authorMaintenance || {}), ...(authorMaintenance || {}) };
+      }
+      return { ...topic, ...scoreMapForBpm() };
+    }
+
+    function renderBpmPreview() {
+      const hasGeneratedText = sections.some((section) => section.text.trim());
+      if (!hasGeneratedText) {
+        bpmPreview.innerHTML = `<div class="preview-empty">先在“策划报告”菜单上传申报表并生成内容。</div>`;
+        return;
+      }
+      const topic = currentBpmTopic();
+	      const rows = [
+	        ["选题名", topic.bookName],
+	        ["作者", topic.authorName || "待从申报表识别"],
+	        ["作译者库", topic.authorMaintenance?.bioStatus || "待生成"],
+	        ["策划编辑", topic.projectEditor || bpmEditorName()],
+	        ["拟责任编辑", topic.editor || bpmEditorName()],
+	        ["BPM分类", `教育 / 本科研究生 / ${topic.class3 || "待模型判断"} / ${topic.class4 || "待模型判断"}`],
+	        ["国标分类", topic.gbClass || "G"],
+	        ["层次", topic.readLevel || "高等理工"],
+	        ["选题特色", truncateText(topic.feature || "", 80)],
+	        ["同类比较", truncateText(topic.compare || "", 80)],
+        ["读者群基数", topic.readerNum || "100"],
+        ["稿件来源", topic.scriptSource || "作者独立投稿"],
+        ["估计千字数", topic.words || "350.00"],
+        ["估计定价", topic.price || "59.8"],
+        ["稿酬方式", `${topic.remPayMode || "销数版税"} ${topic.remStandard || "8"}%`],
+        ["数字化授权", `${topic.digital || "授权"} / ${topic.eRemPayMode || "是"} / ${topic.eRemStandard || "8"}`],
+        ["预计总印数", topic.totalNum || "3000"],
+        ["预计首印数", topic.firstNum || "1200"],
+        ["评分总分", topic.scoreTotal ?? "待生成"],
+        ["是否成本估算", topic.isCost === "1" ? "是" : "否"]
+      ];
+      bpmPreview.innerHTML = rows.map(([label, value]) => `
+        <div class="preview-item">
+          <div class="preview-label">${label}</div>
+          <div class="preview-value" title="${String(value || "")}">${value || "未填写"}</div>
+        </div>
+      `).join("");
+    }
+
+    function jobStatusLabel(status) {
+      return {
+        queued: "排队中",
+        running: "填报中",
+        completed: "已完成",
+        failed: "失败"
+      }[status] || status;
+    }
+
+    function jobStatusClass(status) {
+      if (status === "completed") return "done";
+      if (status === "failed") return "error";
+      return "";
+    }
+
+    async function refreshBpmJobs() {
+      try {
+        const response = await fetch("/api/bpm-jobs");
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        const jobs = data.jobs || [];
+        if (!jobs.length) {
+          bpmJobs.innerHTML = `<div class="preview-empty">暂无 BPM 任务</div>`;
+          return;
+        }
+        bpmJobs.innerHTML = jobs.map((job) => {
+          const logs = (job.logs || []).slice(-4).join("\n");
+          return `
+            <article class="job-card">
+              <div class="job-head">
+                <div class="job-title" title="${job.title || ""}">${job.title || "未命名选题"}</div>
+                <span class="status-pill small ${jobStatusClass(job.status)}">${jobStatusLabel(job.status)}</span>
+              </div>
+              <div class="job-meta">发起人：${job.createdBy || "未知"} · 创建：${job.createdAt || ""}</div>
+              <div class="job-log">${logs || ""}</div>
+            </article>
+          `;
+        }).join("");
+        if (window.lucide) window.lucide.createIcons();
+      } catch (error) {
+        bpmJobs.innerHTML = `<div class="preview-empty">${error.message || "任务日志读取失败"}</div>`;
+      }
+    }
+
+    function ensureTwoSpaceIndent(text) {
+      return text.split(/\n\n+/).map((paragraph) => {
+        const clean = paragraph.replace(/^[　\s]+/, "");
+        return clean.trim() ? `　　${clean}` : "";
+      }).join("\n\n");
+    }
+
+    async function assertBackendReady() {
+      try {
+        const response = await fetch("/api/health", { cache: "no-store" });
+        if (!response.ok) throw new Error(await response.text());
+      } catch (error) {
+        throw new Error(`后端连接失败：${location.origin || "当前页面"}，请确认网站服务窗口没有关闭，并使用 http://10.10.35.19:4174/index.html 打开。`);
+      }
+    }
+
+    function applyGeneratedData(data, options = {}) {
+      const { markConfirmed = false, meta = "已生成策划报告草稿" } = options;
+      docxExported = false;
+      if (data.title) {
+        document.getElementById("projectName").textContent = data.title;
+      }
+      document.getElementById("projectMeta").textContent = meta;
+      if (Array.isArray(data.sections)) {
+        data.sections.forEach((incoming) => {
+          const target = sections.find((section) => section.key === incoming.key);
+          if (!target) return;
+          target.text = ensureTwoSpaceIndent(incoming.text || "");
+          target.confirmed = markConfirmed ? true : Boolean(incoming.confirmed);
+        });
+      }
+      if (Array.isArray(data.scores)) {
+        data.scores.forEach((incoming) => {
+          const target = scoreItems.find((item) => item[0] === incoming[0]);
+          if (!target) return;
+          target[2] = Number(incoming[2] || 0);
+        });
+      }
+      bpmTopic = data.bpmTopic || null;
+      if (bpmTopic && data.bpmFields) {
+        bpmTopic.feature = data.bpmFields.feature || bpmTopic.feature;
+        bpmTopic.compare = data.bpmFields.compare || bpmTopic.compare;
+      }
+      renderAuthorStatus(bpmTopic ? bpmTopic.authorMaintenance : null);
+      renderBpmPreview();
+      renderPending(data.pending_questions || []);
+      scoreRows.innerHTML = "";
+      render();
+    }
+
+    document.getElementById("chooseFile").addEventListener("click", () => {
+      document.getElementById("fileInput").click();
+    });
+
+    document.getElementById("chooseQuickApplication").addEventListener("click", () => {
+      document.getElementById("quickApplicationInput").click();
+    });
+
+    document.getElementById("chooseQuickReport").addEventListener("click", () => {
+      document.getElementById("quickReportInput").click();
+    });
+
+    document.getElementById("menuReport").addEventListener("click", () => switchMainView("report"));
+    document.getElementById("menuBpm").addEventListener("click", () => switchMainView("bpm"));
+    document.getElementById("refreshBpmJobs").addEventListener("click", () => {
+      refreshBpmJobs();
+      showToast("任务日志已刷新");
+    });
+
+    document.getElementById("fileInput").addEventListener("change", (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+      if (!file.name.toLowerCase().endsWith(".docx")) {
+        showToast("请上传 .docx 格式的申报表");
+        event.target.value = "";
+        return;
+      }
+      uploadedFile = file;
+      docxExported = false;
+      document.getElementById("fileName").textContent = file.name;
+      document.getElementById("fileState").textContent = "已选择 · 等待解析和生成";
+      const projectTitle = file.name.replace(/\.(docx?|DOCX?)$/, "").replace(/^电子工业出版社[^-]*-?/, "") || "新建选题";
+      document.getElementById("projectName").textContent = projectTitle;
+      document.getElementById("projectMeta").textContent = "待生成策划报告";
+      renderAuthorStatus(null);
+      updateWorkflowByState();
+      showToast("已选择文件");
+    });
+
+    document.getElementById("quickApplicationInput").addEventListener("change", (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+      if (!file.name.toLowerCase().endsWith(".docx")) {
+        showToast("请上传 .docx 格式的申报表");
+        event.target.value = "";
+        return;
+      }
+      quickApplicationFile = file;
+      document.getElementById("quickApplicationName").textContent = file.name;
+      document.getElementById("quickApplicationState").textContent = "已选择";
+      showToast("已选择申报表");
+    });
+
+    document.getElementById("quickReportInput").addEventListener("change", (event) => {
+      const file = event.target.files[0];
+      if (!file) return;
+      if (!file.name.toLowerCase().endsWith(".docx")) {
+        showToast("请上传 .docx 格式的策划报告");
+        event.target.value = "";
+        return;
+      }
+      quickReportFile = file;
+      document.getElementById("quickReportName").textContent = file.name;
+      document.getElementById("quickReportState").textContent = "已选择";
+      showToast("已选择策划报告");
+    });
+
+    document.getElementById("importBpmSources").addEventListener("click", async () => {
+      if (!quickApplicationFile || !quickReportFile) {
+        showToast("请先选择申报表和策划报告");
+        return;
+      }
+      const button = document.getElementById("importBpmSources");
+      button.disabled = true;
+      setProgress(20, "正在读取申报表和策划报告...");
+      try {
+        await assertBackendReady();
+        const form = new FormData();
+        form.append("application", quickApplicationFile);
+        form.append("report", quickReportFile);
+        const response = await fetch("/api/import-bpm-sources", {
+          method: "POST",
+          body: form
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        applyGeneratedData(data, { markConfirmed: true, meta: "已导入策划报告 · 可直接测试 BPM" });
+        document.getElementById("fileName").textContent = quickApplicationFile.name;
+        document.getElementById("fileState").textContent = "已合并申报表和策划报告";
+        finishProgress("导入完成");
+        switchMainView("bpm");
+        showToast("已准备 BPM 填报数据");
+      } catch (error) {
+        console.error(error);
+        failProgress("导入失败");
+        progressText.textContent = error.message || "导入失败";
+        showToast((error.message || "导入失败").slice(0, 120));
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    sectionText.addEventListener("input", () => {
+      docxExported = false;
+      sections[activeIndex].text = sectionText.value;
+      sections[activeIndex].confirmed = false;
+      sectionStatus.textContent = "待确认";
+      sectionStatus.classList.remove("confirmed");
+      updateWordCount();
+      updateWorkflowByState();
+    });
+
+    document.getElementById("indentText").addEventListener("click", () => {
+      sectionText.value = ensureTwoSpaceIndent(sectionText.value);
+      saveActiveText();
+      docxExported = false;
+      updateWordCount();
+      updateWorkflowByState();
+      showToast("已处理首行空两格");
+    });
+
+    document.getElementById("confirmText").addEventListener("click", () => {
+      sectionText.value = ensureTwoSpaceIndent(sectionText.value);
+      saveActiveText();
+      sections[activeIndex].confirmed = true;
+      renderEditor();
+      updateWorkflowByState();
+      showToast("本段已确认");
+    });
+
+    document.getElementById("polishText").addEventListener("click", () => {
+      sectionText.value = ensureTwoSpaceIndent(sectionText.value)
+        .replaceAll("较清晰", "较为清晰")
+        .replaceAll("待确认。", "需进一步确认。");
+      docxExported = false;
+      saveActiveText();
+      updateWordCount();
+      updateWorkflowByState();
+      showToast("已应用润色");
+    });
+
+    document.getElementById("generateAll").addEventListener("click", async () => {
+      if (!uploadedFile) {
+        showToast("请先上传选题申报表");
+        return;
+      }
+      const button = document.getElementById("generateAll");
+      button.disabled = true;
+      startProgress();
+      try {
+        await assertBackendReady();
+        const form = new FormData();
+        form.append("file", uploadedFile);
+        form.append("modelUrl", document.getElementById("modelUrl").value || "https://api.deepseek.com");
+        form.append("model", document.getElementById("modelName").value || "deepseek-v4-flash");
+        const apiKey = document.getElementById("apiKey").value;
+        if (apiKey) form.append("apiKey", apiKey);
+
+        const response = await fetch("/api/generate-report", {
+          method: "POST",
+          body: form
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const data = await response.json();
+        docxExported = false;
+        if (data.title) {
+          document.getElementById("projectName").textContent = data.title;
+        }
+        document.getElementById("projectMeta").textContent = "已生成策划报告草稿";
+        if (Array.isArray(data.sections)) {
+          data.sections.forEach((incoming) => {
+            const target = sections.find((section) => section.key === incoming.key);
+            if (!target) return;
+            target.text = ensureTwoSpaceIndent(incoming.text || "");
+            target.confirmed = false;
+          });
+        }
+        if (Array.isArray(data.scores)) {
+          data.scores.forEach((incoming) => {
+            const target = scoreItems.find((item) => item[0] === incoming[0]);
+            if (!target) return;
+            target[2] = Number(incoming[2] || 0);
+          });
+        }
+        bpmTopic = data.bpmTopic || null;
+        if (bpmTopic && data.bpmFields) {
+          bpmTopic.feature = data.bpmFields.feature || bpmTopic.feature;
+          bpmTopic.compare = data.bpmFields.compare || bpmTopic.compare;
+        }
+        renderAuthorStatus(bpmTopic ? bpmTopic.authorMaintenance : null);
+        renderBpmPreview();
+        document.getElementById("fileState").textContent = "已生成草稿 · 等待人工确认";
+        renderPending(data.pending_questions || []);
+        scoreRows.innerHTML = "";
+        render();
+        finishProgress("生成完成");
+        showToast("已生成全部段落");
+      } catch (error) {
+        console.error(error);
+        failProgress("生成失败");
+        progressText.textContent = error.message || "生成失败";
+        showToast((error.message || "生成失败").slice(0, 120));
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    document.getElementById("saveDraft").addEventListener("click", () => {
+      saveActiveText();
+      localStorage.setItem(draftKey, JSON.stringify({ sections, scoreItems, bpmTopic, authorMaintenance }));
+      showToast("草稿已保存");
+    });
+
+    document.getElementById("saveModel").addEventListener("click", () => {
+      const config = {
+        modelUrl: document.getElementById("modelUrl").value,
+        modelName: document.getElementById("modelName").value
+      };
+      localStorage.setItem("phei-model-config", JSON.stringify(config));
+      showToast("模型配置已保存");
+    });
+
+    document.getElementById("recalcScore").addEventListener("click", () => {
+      updateScoreTotal();
+      showToast("评分已更新");
+    });
+
+    document.getElementById("exportDocx").addEventListener("click", async () => {
+      saveActiveText();
+      const unconfirmed = sections.filter((section) => !section.confirmed);
+      if (unconfirmed.length) {
+        showToast(`还有 ${unconfirmed.length} 段未确认`);
+        return;
+      }
+	      const payload = {
+	        title: document.getElementById("projectName").textContent || "选题策划报告",
+	        editorName: bpmEditorName(),
+	        sections,
+	        scores: scoreItems,
+	        total: scoreItems.reduce((sum, item) => sum + Number(item[2] || 0), 0)
+      };
+      try {
+        const response = await fetch("/api/export-docx", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+	        const a = document.createElement("a");
+	        a.href = url;
+	        a.download = reportFileName(payload.title, payload.editorName);
+	        a.click();
+        URL.revokeObjectURL(url);
+        document.getElementById("previewEmpty").hidden = true;
+        document.getElementById("previewImage").hidden = false;
+        docxExported = true;
+        updateWorkflowByState(true);
+        showToast("DOCX 已生成");
+      } catch (error) {
+        console.error(error);
+        showToast("导出需要启动本地后端服务");
+      }
+    });
+
+    document.getElementById("queueBpm").addEventListener("click", async () => {
+      saveActiveText();
+      renderBpmPreview();
+      const unconfirmed = sections.filter((section) => !section.confirmed);
+      if (unconfirmed.length) {
+        showToast(`还有 ${unconfirmed.length} 段未确认`);
+        return;
+      }
+	      const bpm = {
+	        url: document.getElementById("bpmUrl").value || "http://bpm.phei.com.cn:8088/portal/r/w",
+	        user: document.getElementById("bpmUser").value.trim(),
+	        name: bpmEditorName(),
+	        password: document.getElementById("bpmPassword").value
+	      };
+	      if (!bpm.user || !bpm.name || !bpm.password) {
+	        showToast("请填写 BPM 账号、姓名和密码");
+	        return;
+	      }
+      const title = document.getElementById("projectName").textContent || "选题策划报告";
+      if (!window.confirm(`确认把《${title}》加入 BPM 暂存队列？后台会按顺序登录 BPM 并创建草稿。`)) return;
+
+      const button = document.getElementById("queueBpm");
+      button.disabled = true;
+      setBpmProgress(40, "正在加入 BPM 队列...");
+      bpmTopic = currentBpmTopic();
+	      const payload = {
+	        title,
+	        editorName: bpm.name,
+	        sections,
+        scores: scoreItems,
+        total: scoreItems.reduce((sum, item) => sum + Number(item[2] || 0), 0),
+        bpmTopic,
+        bpm
+      };
+      try {
+        const response = await fetch("/api/bpm-jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const result = await response.json();
+        finishBpmProgress("已加入 BPM 队列");
+        bpmStatus.textContent = `已加入队列：${result.title || title}`;
+        document.getElementById("fileState").textContent = "已加入 BPM 队列";
+        document.getElementById("bpmPassword").value = "";
+        await refreshBpmJobs();
+        showToast("已加入 BPM 队列");
+      } catch (error) {
+        console.error(error);
+        failBpmProgress("加入队列失败");
+        bpmStatus.textContent = error.message.slice(0, 80) || "加入队列失败";
+        showToast("加入队列失败");
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    const cached = localStorage.getItem(draftKey);
+    if (cached) {
+      try {
+        const data = JSON.parse(cached);
+        if (Array.isArray(data.sections)) {
+          data.sections.forEach((section, index) => {
+            if (sections[index]) Object.assign(sections[index], section);
+          });
+        }
+        if (Array.isArray(data.scoreItems)) {
+          data.scoreItems.forEach((item, index) => {
+            if (scoreItems[index]) scoreItems[index][2] = item[2];
+          });
+        }
+        bpmTopic = data.bpmTopic || null;
+        renderAuthorStatus(data.authorMaintenance || bpmTopic?.authorMaintenance || null);
+      } catch (error) {
+        console.warn(error);
+      }
+    }
+
+    const modelConfig = localStorage.getItem("phei-model-config");
+    if (modelConfig) {
+      try {
+        const config = JSON.parse(modelConfig);
+        document.getElementById("modelUrl").value = config.modelUrl || "https://api.deepseek.com";
+        document.getElementById("modelName").value = config.modelName || "deepseek-v4-flash";
+      } catch (error) {
+        console.warn(error);
+      }
+    }
+
+    renderPending();
+    render();
+    renderBpmPreview();
+    refreshBpmJobs();
+    window.setInterval(() => {
+      if (!bpmView.hidden) refreshBpmJobs();
+    }, 5000);
+  </script>
+</body>
+</html>

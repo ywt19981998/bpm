@@ -1,0 +1,1606 @@
+from __future__ import annotations
+
+import json
+import re
+import tempfile
+import urllib.error
+import urllib.request
+import cgi
+from html import unescape
+import os
+import queue
+import subprocess
+import threading
+import uuid
+from copy import deepcopy
+from datetime import date, datetime, timedelta
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from importlib.util import module_from_spec, spec_from_file_location
+from pathlib import Path
+from urllib.parse import quote, unquote, urlparse
+
+from docx import Document
+
+
+ROOT = Path(__file__).resolve().parent
+TEMPLATE = ROOT / "templates" / "planning-report-template.docx"
+EXTRACTOR = ROOT / "skills" / "phei-topic-planning-report" / "scripts" / "extract_application_docx.py"
+REPORT_RULES = ROOT / "skills" / "phei-topic-planning-report" / "references" / "report_sections.md"
+SCORING_RULES = ROOT / "skills" / "phei-topic-planning-report" / "references" / "scoring_rules.md"
+BPM_SCRIPT = ROOT / "skills" / "phei-bpm-topic-declaration" / "scripts" / "fill_topic.js"
+NODE_MODULES = ROOT / "node_modules"
+RUNTIME_LOG = ROOT / "server-runtime.log"
+
+DEFAULT_MODEL_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
+DEFAULT_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
+DEFAULT_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash").strip()
+
+JOB_LOCK = threading.Lock()
+JOB_QUEUE: queue.Queue = queue.Queue()
+JOBS: dict[str, dict] = {}
+MAX_JOBS = 50
+
+
+def runtime_log(message: str):
+    try:
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with RUNTIME_LOG.open("a", encoding="utf-8") as log:
+            log.write(f"{stamp} {message}\n")
+    except Exception:
+        pass
+
+
+ROW_BY_KEY = {
+    "content": 7,
+    "author": 8,
+    "feasibility": 9,
+    "award": 10,
+    "profit": 11,
+    "marketing": 12,
+}
+
+SECTION_TITLES = {
+    "content": "一、选题内容",
+    "author": "二、作者情况",
+    "feasibility": "三、策划过程与可行性",
+    "award": "四、获奖潜质",
+    "profit": "五、成本与盈利估算",
+    "marketing": "六、市场定位与营销",
+}
+
+SCORE_NAMES = {
+    "content": "选题内容",
+    "author": "作者情况",
+    "feasibility": "策划过程与可行性",
+    "award": "获奖潜质",
+    "profit": "成本与盈利估算",
+    "marketing": "市场定位与营销",
+}
+
+BPM_FIXED_CLASSIFICATION = {
+    "class1": "02",
+    "class2": "0201",
+    "gbClass": "G",
+    "readLevel": "高等理工",
+}
+
+FIXED_PROFIT_SECTION_TEXT = """　　（一）纸质教材
+　　1.出版规格
+　　（1）版权字数： 350 千字。
+　　（2）印张： 14。
+　　（3）正文印刷色数：  单色。
+
+　　2.盈利估算
+　　（1）定价：  59.8  元。
+　　（2）版税（率）：  8%。
+　　（3）发货折扣：    65%。
+　　（4）预估首印数：   1200册。
+　　（5）预估总印数：   3000册。
+　　（6）包销册数：     0册；包销折扣： 0 %。
+　　（7）出版资助：   
+　　（8）预计总毛利润：   """
+
+AI_REPORT_STYLE_GUIDE = """参照《AI驱动软件开发实战》选题策划报告的一到六部分写法，对除第五部分外的内容进行二次润色。风格要求如下：
+1. 一、选题内容：写成3段左右。第1段先判断出版导向、现实命题和出版定位；第2段概括全书规模、篇章结构和主要内容链条；第3段集中写创新点，常用“三方面”结构，并在末尾谨慎说明版权授权/版权风险。
+2. 二、作者情况：写成2段左右。第1段写第一作者身份、职业/教学/科研经历和与选题的相关性；第2段写代表性成果、项目、著作、专利、课程或团队基础。若作者首次出版，要用“虽然……但……”平衡风险和能力。
+3. 三、策划过程与可行性：写成3段左右。第1段从真实教学、行业或课程痛点切入；第2段写策划思路，强调“概念-方法-案例-工具包”或类似闭环；第3段写稿件成熟度、进度、资源素材和按期出版可行性。
+4. 四、获奖潜质：写成2段左右。第1段写教材化、课程化、培训化、数字资源化等延展潜力；第2段写版权输出、数字课程、资源传播或国际交流空间。语气必须谨慎，不承诺获奖。
+5. 六、市场定位与营销：写成4段左右。第1段列出2-4类目标读者；第2段写竞品/同类选题格局和本书差异化；第3段写营销组合，如高校课程推广、作者渠道、技术/教学社区、样章试读、讲座培训等；第4段写配套资源和“图书+资源+服务”的推广方式。
+6. 整体语言要像责任编辑内部上会材料：具体、稳健、有判断，不写空泛套话；每段都要体现“为什么值得出版、内容怎么组织、如何落地推广”。不要照抄范文中的AI软件开发事实，必须替换为当前申报表对应事实。
+"""
+
+
+def safe_name(name: str) -> str:
+    name = re.sub(r"[\\/:*?\"<>|]+", "_", name or "选题策划报告")
+    return name.strip() or "选题策划报告"
+
+
+def format_chinese_date(value: date | None = None) -> str:
+    value = value or date.today()
+    return f"{value.year}年{value.month}月{value.day}日"
+
+
+def editor_name_from_payload(payload: dict) -> str:
+    bpm = payload.get("bpm") or {}
+    return first_non_empty(payload.get("editorName", ""), bpm.get("name", ""), "叶文涛")
+
+
+def title_for_report_filename(title: str) -> str:
+    clean = safe_name(title or "选题策划报告")
+    if clean.startswith("《") and clean.endswith("》"):
+        return clean
+    return f"《{clean}》"
+
+
+def report_file_stem(title: str, editor_name: str, value: date | None = None) -> str:
+    return f"{title_for_report_filename(title)}选题策划报告（高等教育出版分社+{safe_name(editor_name)}+{format_chinese_date(value)}）"
+
+
+def editor_identity(editor_name: str) -> dict:
+    if editor_name == "叶文涛":
+        return {
+            "projectEditorNo": "2024070801",
+            "projectEditorUid": "yewt",
+            "editorNo": "2024070801",
+            "editorUid": "yewt",
+        }
+    return {
+        "projectEditorNo": "",
+        "projectEditorUid": "",
+        "editorNo": "",
+        "editorUid": "",
+    }
+
+
+def first_unique_cell(row, index):
+    seen = []
+    unique = []
+    for cell in row.cells:
+        if cell._tc not in seen:
+            seen.append(cell._tc)
+            unique.append(cell)
+    return unique[index]
+
+
+def capture_format(cell):
+    para = cell.paragraphs[0] if cell.paragraphs else None
+    ppr = deepcopy(para._p.pPr) if para is not None and para._p.pPr is not None else None
+    rpr = None
+    if para is not None:
+        for run in para.runs:
+            if run._r.rPr is not None:
+                rpr = deepcopy(run._r.rPr)
+                break
+    return ppr, rpr
+
+
+def ensure_indent(text: str) -> str:
+    parts = []
+    for part in re.split(r"\n\s*\n", text or ""):
+        lines = [line.rstrip() for line in part.splitlines()]
+        cleaned = "\n".join(lines).strip()
+        if not cleaned:
+            continue
+        cleaned = re.sub(r"^[　\s]+", "", cleaned)
+        parts.append("　　" + cleaned)
+    return "\n\n".join(parts)
+
+
+def set_cell_text_preserve_format(cell, text: str):
+    ppr, rpr = capture_format(cell)
+    cell._tc.clear_content()
+    parts = [part for part in re.split(r"\n\s*\n", text or "") if part.strip()] or [""]
+    for part in parts:
+        para = cell.add_paragraph()
+        if ppr is not None:
+            para._p.insert(0, deepcopy(ppr))
+        for i, line in enumerate(part.splitlines() or [""]):
+            if i:
+                para.add_run().add_break()
+            run = para.add_run(line)
+            if rpr is not None:
+                run._r.insert(0, deepcopy(rpr))
+
+
+def clear_fixed_row_height(row):
+    tr_pr = row._tr.trPr
+    if tr_pr is None:
+        return
+    for child in list(tr_pr):
+        if child.tag.endswith("}trHeight"):
+            tr_pr.remove(child)
+
+
+def build_docx(payload: dict) -> Path:
+    if not TEMPLATE.exists():
+        raise FileNotFoundError(f"模板不存在: {TEMPLATE}")
+
+    raw_title = payload.get("title") or "选题策划报告"
+    title = safe_name(raw_title)
+    editor_name = editor_name_from_payload(payload)
+    today = date.today()
+    out = Path(tempfile.gettempdir()) / f"{report_file_stem(raw_title, editor_name, today)}.docx"
+    doc = Document(str(TEMPLATE))
+    table = doc.tables[0]
+
+    set_cell_text_preserve_format(first_unique_cell(table.rows[0], 1), format_chinese_date(today))
+    set_cell_text_preserve_format(first_unique_cell(table.rows[2], 1), title)
+    set_cell_text_preserve_format(first_unique_cell(table.rows[3], 1), editor_name)
+    set_cell_text_preserve_format(first_unique_cell(table.rows[4], 5), str(payload.get("total", "")))
+    set_cell_text_preserve_format(first_unique_cell(table.rows[5], 5), str(payload.get("total", "")))
+
+    scores = {item[0]: item[2] for item in payload.get("scores", []) if len(item) >= 3}
+    score_by_key = {
+        "content": scores.get("选题内容", ""),
+        "author": scores.get("作者情况", ""),
+        "feasibility": scores.get("策划过程与可行性", ""),
+        "award": scores.get("获奖潜质", ""),
+        "profit": scores.get("成本与盈利估算", ""),
+        "marketing": scores.get("市场定位与营销", ""),
+    }
+
+    for section in payload.get("sections", []):
+        key = section.get("key")
+        if key not in ROW_BY_KEY:
+            continue
+        row_idx = ROW_BY_KEY[key]
+        set_cell_text_preserve_format(first_unique_cell(table.rows[row_idx], 2), ensure_indent(section.get("text", "")))
+        set_cell_text_preserve_format(first_unique_cell(table.rows[row_idx], 3), str(score_by_key.get(key, "")))
+
+    clear_fixed_row_height(table.rows[13])
+    set_cell_text_preserve_format(first_unique_cell(table.rows[13], 2), "本选题如为新编教材，则此项不适用；如为再版修订，请补充上一版销量、院校使用情况和修订计划。")
+    set_cell_text_preserve_format(first_unique_cell(table.rows[14], 2), "目录待由申报表解析后写入。")
+    set_cell_text_preserve_format(first_unique_cell(table.rows[15], 2), "样章内容待作者补充。")
+
+    doc.save(str(out))
+    return out
+
+
+def load_extractor():
+    spec = spec_from_file_location("phei_extract_application_docx", EXTRACTOR)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"无法加载申报表抽取脚本: {EXTRACTOR}")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8")
+
+
+AUTHOR_BIO_FIELDS = ("作者简介", "作译者简介", "主编简介", "工作简历或单位简介", "工作简历", "个人简介")
+
+
+def html_to_text(html: str) -> str:
+    html = re.sub(r"(?is)<(script|style|noscript).*?>.*?</\1>", " ", html or "")
+    html = re.sub(r"(?is)<br\s*/?>", "\n", html)
+    html = re.sub(r"(?is)</p\s*>", "\n", html)
+    html = re.sub(r"(?is)<[^>]+>", " ", html)
+    text = unescape(html)
+    text = re.sub(r"[ \t\r\f\v]+", " ", text)
+    return re.sub(r"\n\s*\n+", "\n", text).strip()
+
+
+def fetch_url_text(url: str, timeout: int = 6, limit: int = 160000) -> str:
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/125 Safari/537.36",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.6",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read(limit)
+            charset = response.headers.get_content_charset() or "utf-8"
+        return raw.decode(charset, errors="ignore")
+    except Exception as exc:
+        runtime_log(f"author-search fetch failed url={url} error={type(exc).__name__}: {exc}")
+        return ""
+
+
+def parse_search_results(html: str) -> list[dict]:
+    results = []
+    for match in re.finditer(r'(?is)<li[^>]+class="[^"]*\bb_algo\b[^"]*"[^>]*>.*?<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>.*?</li>', html or ""):
+        url = unescape(match.group(1))
+        title = html_to_text(match.group(2))
+        if url.startswith("http"):
+            results.append({"title": title, "url": url})
+    if results:
+        return results[:8]
+    for match in re.finditer(r'(?is)<a[^>]+href="(https?://[^"]+)"[^>]*>(.*?)</a>', html or ""):
+        url = unescape(match.group(1))
+        title = html_to_text(match.group(2))
+        if title and "bing" not in urlparse(url).netloc:
+            results.append({"title": title, "url": url})
+        if len(results) >= 8:
+            break
+    return results
+
+
+def search_web_results(query: str) -> list[dict]:
+    url = f"https://www.bing.com/search?q={quote(query)}&setlang=zh-CN"
+    html = fetch_url_text(url, timeout=7, limit=220000)
+    return parse_search_results(html)
+
+
+def official_score(result: dict, unit: str) -> int:
+    url = result.get("url", "")
+    host = urlparse(url).netloc.lower()
+    text = f"{result.get('title', '')} {url}".lower()
+    score = 0
+    if ".edu.cn" in host or ".edu." in host or host.endswith(".edu"):
+        score += 5
+    if "faculty" in text or "teacher" in text or "szdw" in text or "师资" in text or "教师" in text:
+        score += 2
+    unit_tokens = [token for token in re.split(r"[\s,，/／（）()·]+", unit or "") if len(token) >= 2]
+    if any(token in result.get("title", "") or token in url for token in unit_tokens[:3]):
+        score += 2
+    return score
+
+
+def author_official_search_context(facts: dict) -> dict:
+    if first_non_empty(*(field_value(facts, name) for name in AUTHOR_BIO_FIELDS)):
+        return {}
+    name = first_non_empty(
+        field_value(facts, "作者姓名", "姓名", "主要作（译）者姓名", "第一作者姓名"),
+        field_value(facts, "主编", "作者"),
+    )
+    unit = field_value(facts, "工作单位", "单位名称", "作者单位", "所在单位")
+    if not name:
+        return {}
+    query = " ".join(part for part in [name, unit, "教师 简介 个人主页"] if part)
+    try:
+        results = search_web_results(query)
+    except Exception as exc:
+        runtime_log(f"author-search query failed name={name} error={type(exc).__name__}: {exc}")
+        return {}
+    ranked = sorted(results, key=lambda item: official_score(item, unit), reverse=True)
+    selected = []
+    for result in ranked[:4]:
+        page_html = fetch_url_text(result["url"], timeout=5, limit=120000)
+        page_text = html_to_text(page_html)
+        if name not in page_text and official_score(result, unit) < 5:
+            excerpt = ""
+        else:
+            index = page_text.find(name)
+            if index >= 0:
+                start = max(0, index - 240)
+                excerpt = page_text[start : start + 1200]
+            else:
+                excerpt = page_text[:900]
+        selected.append(
+            {
+                "title": result.get("title", ""),
+                "url": result.get("url", ""),
+                "excerpt": short_text(excerpt, 900),
+            }
+        )
+        if len(selected) >= 3:
+            break
+    context = {
+        "query": query,
+        "results": [item for item in selected if item.get("excerpt")],
+    }
+    if context["results"]:
+        runtime_log(f"author-search ok name={name} results={len(context['results'])}")
+    else:
+        runtime_log(f"author-search no usable official text name={name}")
+    return context if context["results"] else {}
+
+
+def compact_facts(facts: dict) -> dict:
+    fields = facts.get("canonical_fields") or facts.get("application_fields") or {}
+    keep_keys = [
+        "教材名称",
+        "选题名称",
+        "作者姓名",
+        "姓名",
+        "单位名称",
+        "职务/职称",
+        "职称",
+        "学术或教育组织任职",
+        "已出版教材或著作",
+        "作者简介",
+        "作译者简介",
+        "工作单位",
+        "作者单位",
+        "性别",
+        "证件类型",
+        "证件号",
+        "身份证号",
+        "学历",
+        "学位",
+        "专业",
+        "作者专业",
+        "毕业院校",
+        "联系电话",
+        "联系电话1",
+        "联系电话2",
+        "手机",
+        "电子邮箱",
+        "邮箱",
+        "邮编",
+        "通信地址",
+        "通讯地址",
+        "单位地址",
+        "单位邮编",
+        "单位联系人",
+        "工作简历或单位简介",
+        "合作者 情况简介",
+        "合作者情况简介",
+        "参加的学术组织及任职情况",
+        "科研或教研项目经历",
+        "科研或教学工作及获奖情况",
+        "著作方向",
+        "主要著作出版情况",
+        "近几年 教学经历",
+        "本课程教改、效果和获奖情况",
+        "内容简介",
+        "读者 对象",
+        "读者定位",
+        "本教材特色和优势",
+        "国内外同类教材比较",
+        "课程基本情况",
+        "估计字数",
+        "估计字数（千字）",
+        "适用层次",
+        "适用专业",
+        "类别",
+        "总学时数",
+        "本校教材年用量估计",
+        "是否愿意资助出版，资助费用",
+        "预定交稿时间",
+        "著译写作 时间表",
+        "参编人员",
+        "编 写 大 纲 或 主 要 目 录",
+        "写作资料 主要来源",
+    ]
+    selected = {key: fields.get(key) for key in keep_keys if fields.get(key)}
+    compact = {
+        "document_title": facts.get("document_title"),
+        "form_date": facts.get("form_date"),
+        "fields": selected,
+        "appendix_sections": facts.get("appendix_sections", {}),
+    }
+    official_context = author_official_search_context(facts)
+    if official_context:
+        compact["author_official_search_context"] = official_context
+    return compact
+
+
+def strip_indent(text: str) -> str:
+    text = re.sub(r"^[　\s]+", "", text or "", flags=re.M)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
+def field_value(facts: dict, *names: str) -> str:
+    fields = facts.get("canonical_fields") or facts.get("application_fields") or {}
+    for name in names:
+        value = fields.get(name)
+        if value:
+            return str(value).strip()
+    return ""
+
+
+def section_value(result: dict, key: str) -> str:
+    for section in result.get("sections", []):
+        if section.get("key") == key:
+            return strip_indent(section.get("text", ""))
+    return ""
+
+
+def first_non_empty(*values: str) -> str:
+    for value in values:
+        clean = strip_indent(value)
+        if clean:
+            return clean
+    return ""
+
+
+def clean_person_name(value: str) -> str:
+    text = strip_indent(value)
+    if not text:
+        return ""
+    text = re.sub(r"^(作者姓名|姓名|第一作者姓名|主要作（译）者姓名|主编|作者)[:：\s]*", "", text)
+    text = text.strip(" ：:，,；;。")
+    if is_likely_person_name(text):
+        return text
+    patterns = [
+        r"第一作者\s*([\u4e00-\u9fff·]{2,8})",
+        r"本书第一作者\s*([\u4e00-\u9fff·]{2,8})",
+        r"作者[:：\s]+([\u4e00-\u9fff·]{2,8})",
+        r"主编[:：\s]+([\u4e00-\u9fff·]{2,8})",
+        r"姓名[:：\s]*([\u4e00-\u9fff·]{2,8})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match and is_likely_person_name(match.group(1).strip()):
+            return match.group(1).strip()
+    first = re.split(r"[，,、；;\s\n]", text, maxsplit=1)[0].strip()
+    if is_likely_person_name(first):
+        return first
+    return ""
+
+
+def is_likely_person_name(value: str) -> bool:
+    text = strip_indent(value).strip(" ：:，,；;。")
+    if not re.fullmatch(r"[\u4e00-\u9fff·]{2,8}", text or ""):
+        return False
+    if text.startswith(("为", "由", "以", "与", "和", "及", "等")):
+        return False
+    non_name_words = (
+        "自由职业", "职业者", "第一作者", "合作者", "作者", "主编", "教材",
+        "本书", "该书", "出版", "情况", "简介", "工程师", "教授", "研究员",
+    )
+    return not any(word in text for word in non_name_words)
+
+
+def all_fact_fields(facts: dict) -> dict:
+    fields = {}
+    for source_name in ("application_fields", "canonical_fields"):
+        source = facts.get(source_name) or {}
+        if isinstance(source, dict):
+            fields.update(source)
+    return fields
+
+
+def extract_first_author_from_text(value: str) -> str:
+    text = strip_indent(value)
+    if not text:
+        return ""
+    first = re.split(r"[，,、；;\s\n]", text, maxsplit=1)[0].strip()
+    if is_likely_person_name(first):
+        return first
+    patterns = [
+        r"([\u4e00-\u9fff·]{2,8})[，,、]\s*(?:第一作者|主编|作者|主笔)",
+        r"(?:第一作者|主编|作者|姓名)[:：\s]+([\u4e00-\u9fff·]{2,8})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match and is_likely_person_name(match.group(1).strip()):
+            return match.group(1).strip()
+    return ""
+
+
+def extract_author_name_from_facts(facts: dict) -> str:
+    for key in ("作者姓名", "姓名", "主要作（译）者姓名", "第一作者姓名", "主编"):
+        name = clean_person_name(field_value(facts, key))
+        if name:
+            return name
+
+    for key, value in all_fact_fields(facts).items():
+        key_text = str(key)
+        if any(token in key_text for token in ("姓名", "作者", "合作者", "主编")):
+            name = extract_first_author_from_text(str(value))
+            if name:
+                return name
+    return ""
+
+
+def blank_if_missing(value: str) -> str:
+    return strip_indent(value) or "　"
+
+
+def short_text(text: str, limit: int = 1000) -> str:
+    clean = strip_indent(text)
+    return clean if len(clean) <= limit else clean[: limit - 1] + "…"
+
+
+def number_text(value: str, default: str) -> str:
+    match = re.search(r"\d+(?:\.\d+)?", str(value or ""))
+    return match.group(0) if match else default
+
+
+def normalize_bpm_date(value: str, fallback: date) -> str:
+    text = str(value or "")
+    match = re.search(r"(20\d{2})[年./-]\s*(\d{1,2})(?:[月./-]\s*(\d{1,2}))?", text)
+    if not match:
+        return fallback.isoformat()
+    year = int(match.group(1))
+    month = int(match.group(2))
+    day = int(match.group(3) or 28)
+    try:
+        return date(year, month, day).isoformat()
+    except ValueError:
+        return fallback.isoformat()
+
+
+def infer_bpm_detailed_classification(title: str, facts: dict, content: str, marketing: str) -> dict:
+    text = " ".join(
+        [
+            title or "",
+            field_value(facts, "适用专业", "类别", "课程基本情况"),
+            content or "",
+            marketing or "",
+        ]
+    )
+    if re.search(r"人工智能|AI|软件|程序|编程|Python|Java|Web|数据|数据库|算法|计算机", text, re.I):
+        return {
+            "class3": "020101",
+            "class4": "02010103",
+            "bwClass": "计算机",
+            "bwCipClass": "TP",
+        }
+    if re.search(r"经济|管理|营销|财务|会计|金融|工商", text):
+        return {
+            "class3": "",
+            "class4": "",
+            "bwClass": "经管",
+            "bwCipClass": "F",
+        }
+    if re.search(r"物理|医学|医药|机械|电子|通信|自动化|工程|材料", text):
+        return {
+            "class3": "020101",
+            "class4": "02010103",
+            "bwClass": "大科技专业与科普",
+            "bwCipClass": "N",
+        }
+    return {
+        "class3": "020101",
+        "class4": "02010103",
+        "bwClass": "其他",
+        "bwCipClass": "G",
+    }
+
+
+def fixed_bpm_defaults() -> dict:
+    return {
+        "readerNum": "100",
+        "language": "中文",
+        "scriptSource": "作者独立投稿",
+        "scriptStyle": "电子文件",
+        "awards": "无",
+        "colorPrint": "单色",
+        "haveCd": "",
+        "words": "350.00",
+        "price": "59.8",
+        "remCharNum": "0",
+        "remPayMode": "销数版税",
+        "remStandard": "8",
+        "remUnit": "2",
+        "publishMode": "常规出版",
+        "haveZz": "否",
+        "imburseFee": "0",
+        "imburseNum": "0",
+        "haveBx": "否",
+        "bsaleNum": "0",
+        "bsaleDiscount": "0",
+        "coMode": "",
+        "coBuyDiscount": "0",
+        "bsaleMode": "",
+        "digital": "授权",
+        "eRemPayMode": "是",
+        "eRemStandard": "8",
+        "totalNum": "3000",
+        "firstNum": "1200",
+        "project": "无",
+        "scriptClassify": "普通选题",
+        "isCost": "1",
+        "impScript": "否",
+        "isUrgent": "普通",
+        "isMeeting": "否",
+    }
+
+
+def author_field(facts: dict, *names: str) -> str:
+    return field_value(facts, *names)
+
+
+def build_author_bio(facts: dict, result: dict) -> tuple[str, str]:
+    source_bio = first_non_empty(
+        author_field(facts, "作者简介", "作译者简介", "主编简介"),
+        author_field(facts, "工作简历或单位简介", "工作简历", "个人简介"),
+    )
+    if source_bio:
+        return short_text(source_bio, 1000), "申报表已有"
+
+    model_author = ""
+    author_maintenance = result.get("authorMaintenance") or result.get("author_maintenance") or {}
+    if isinstance(author_maintenance, dict):
+        model_author = first_non_empty(str(author_maintenance.get("bio", "")))
+    generated = first_non_empty(model_author, section_value(result, "author"))
+    if generated:
+        return short_text(generated, 1000), "AI已补全"
+    return "　", "待补全失败"
+
+
+def build_author_maintenance(facts: dict, result: dict, editor_name: str = "叶文涛") -> dict:
+    bio, bio_status = build_author_bio(facts, result)
+    name = extract_author_name_from_facts(facts)
+    work_unit = author_field(facts, "工作单位", "单位名称", "作者单位", "所在单位")
+    major = author_field(facts, "专业", "作者专业", "适用专业")
+    writing_direction = author_field(facts, "著作方向", "研究方向", "专业方向")
+    editor_identity_map = editor_identity(editor_name)
+    return {
+        "enabled": bool(name),
+        "type": "个人",
+        "name": name,
+        "contactor": editor_name,
+        "contactorUid": editor_identity_map.get("projectEditorUid", ""),
+        "contactorDeptId": "13640" if editor_name == "叶文涛" else "",
+        "gender": author_field(facts, "性别"),
+        "certificateType": author_field(facts, "证件类型") or "其他",
+        "certificateNo": blank_if_missing(author_field(facts, "证件号", "身份证号")),
+        "title": blank_if_missing(author_field(facts, "职务/职称", "职称", "职务")),
+        "education": blank_if_missing(author_field(facts, "学历", "学位")),
+        "major": blank_if_missing(major),
+        "graduateSchool": blank_if_missing(author_field(facts, "毕业院校", "毕业学校")),
+        "workUnit": blank_if_missing(work_unit),
+        "unitAddress": blank_if_missing(author_field(facts, "单位地址")),
+        "unitZip": blank_if_missing(author_field(facts, "单位邮编", "邮编")),
+        "unitContactor": blank_if_missing(author_field(facts, "单位联系人")),
+        "unitFax": blank_if_missing(author_field(facts, "单位传真")),
+        "phone1": blank_if_missing(author_field(facts, "联系电话", "联系电话1", "手机", "电话")),
+        "phone2": blank_if_missing(author_field(facts, "联系电话2")),
+        "fax": blank_if_missing(author_field(facts, "传真")),
+        "email": blank_if_missing(author_field(facts, "电子邮箱", "邮箱", "电子邮件")),
+        "postalCode": blank_if_missing(author_field(facts, "邮编")),
+        "address": blank_if_missing(author_field(facts, "通信地址", "通讯地址", "联系地址")),
+        "workResume": blank_if_missing(author_field(facts, "工作简历或单位简介", "工作简历", "个人简介")),
+        "academicOrganizations": blank_if_missing(author_field(facts, "参加的学术组织及任职情况", "学术或教育组织任职")),
+        "researchProjects": blank_if_missing(author_field(facts, "科研或教研项目经历", "项目经历", "教研项目")),
+        "awards": blank_if_missing(author_field(facts, "科研或教学工作及获奖情况", "获奖情况", "教学获奖")),
+        "writingDirection": blank_if_missing(writing_direction or major),
+        "publications": blank_if_missing(author_field(facts, "主要著作出版情况", "已出版教材或著作", "著作出版情况")),
+        "bio": bio,
+        "bioStatus": bio_status,
+    }
+
+
+def report_scores(result_or_payload: dict) -> dict:
+    names = {
+        "选题内容": "scoreContent",
+        "作者情况": "scoreAuthor",
+        "策划过程与可行性": "scoreFeasibility",
+        "获奖潜质": "scoreAward",
+        "成本与盈利估算": "scoreProfit",
+        "市场定位与营销": "scoreMarketing",
+    }
+    scores = {}
+    total = 0
+    for item in result_or_payload.get("scores", []):
+        if not isinstance(item, list) or len(item) < 3:
+            continue
+        key = names.get(item[0])
+        if not key:
+            continue
+        try:
+            value = int(item[2])
+        except Exception:
+            value = 0
+        scores[key] = value
+        total += value
+    if scores:
+        scores["scoreTotal"] = total
+    return scores
+
+
+def build_bpm_topic(facts: dict, result: dict) -> dict:
+    today = date.today()
+    content = section_value(result, "content")
+    author = section_value(result, "author")
+    marketing = section_value(result, "marketing")
+    title = first_non_empty(
+        result.get("title", ""),
+        field_value(facts, "教材名称", "选题名称", "书名"),
+        "选题策划报告",
+    )
+    brief = first_non_empty(field_value(facts, "内容简介"), content)
+    reader = first_non_empty(field_value(facts, "读者 对象", "读者对象", "读者定位"), marketing)
+    bpm_fields = result.get("bpmFields") or result.get("bpm_fields") or {}
+    feature = first_non_empty(bpm_fields.get("feature", ""), field_value(facts, "本教材特色和优势", "特色和优势"), content)
+    compare = first_non_empty(bpm_fields.get("compare", ""), field_value(facts, "国内外同类教材比较", "同类教材比较"), marketing)
+    author_name = extract_author_name_from_facts(facts)
+    book_name = safe_name(title).replace("-选题策划报告", "")
+    detailed_classification = infer_bpm_detailed_classification(title, facts, content, marketing)
+    model_classification = result.get("bpmClassification") or result.get("bpm_classification") or {}
+    class3 = first_non_empty(str(model_classification.get("class3", "")), detailed_classification.get("class3", ""))
+    class4 = first_non_empty(str(model_classification.get("class4", "")), detailed_classification.get("class4", ""))
+
+    editor_name = editor_name_from_payload({})
+    return {
+        **fixed_bpm_defaults(),
+        **detailed_classification,
+        **BPM_FIXED_CLASSIFICATION,
+        "class3": class3,
+        "class4": class4,
+        "bookName": book_name,
+        "authorName": author_name,
+        "authorCode": "",
+        "authorId": "",
+        "brief": short_text(brief),
+        "reader": short_text(reader),
+        "feature": short_text(feature),
+        "compare": short_text(compare),
+        "scriptDate": normalize_bpm_date(field_value(facts, "预定交稿时间", "交稿日期"), today + timedelta(days=90)),
+        "makingDate": normalize_bpm_date(field_value(facts, "预计发稿日期"), today + timedelta(days=150)),
+        "publishDate": normalize_bpm_date(field_value(facts, "预计出版日期", "出版日期"), today + timedelta(days=270)),
+        "authorMaintenance": build_author_maintenance(facts, result, editor_name),
+        **report_scores(result),
+    }
+
+
+def merge_bpm_topic(payload: dict) -> dict:
+    topic = dict(payload.get("bpmTopic") or {})
+    bpm_fields = payload.get("bpmFields") or payload.get("bpm_fields") or {}
+    editor_name = editor_name_from_payload(payload)
+    topic.update(BPM_FIXED_CLASSIFICATION)
+    topic["class3"] = first_non_empty(str(topic.get("class3", "")), "020101")
+    topic["class4"] = first_non_empty(str(topic.get("class4", "")), "02010103")
+    topic["bookName"] = safe_name(payload.get("title") or topic.get("bookName") or "选题策划报告")
+    author_name_source = str(topic.get("authorName", ""))
+    if isinstance(topic.get("authorMaintenance"), dict):
+        author_name_source = first_non_empty(author_name_source, topic["authorMaintenance"].get("name", ""))
+    topic["authorName"] = clean_person_name(author_name_source)
+    topic["projectEditor"] = editor_name
+    topic["editor"] = editor_name
+    topic.update(editor_identity(editor_name))
+    sections = {section.get("key"): strip_indent(section.get("text", "")) for section in payload.get("sections", [])}
+    topic["brief"] = short_text(first_non_empty(topic.get("brief", ""), sections.get("content", "")))
+    topic["reader"] = short_text(first_non_empty(topic.get("reader", ""), sections.get("marketing", "")))
+    topic["feature"] = short_text(first_non_empty(bpm_fields.get("feature", ""), topic.get("feature", ""), sections.get("content", "")))
+    topic["compare"] = short_text(first_non_empty(bpm_fields.get("compare", ""), topic.get("compare", ""), sections.get("marketing", "")))
+    if isinstance(topic.get("authorMaintenance"), dict):
+        topic["authorMaintenance"]["contactor"] = editor_name
+        topic["authorMaintenance"]["contactorUid"] = topic.get("projectEditorUid", "")
+        topic["authorMaintenance"]["contactorDeptId"] = "13640" if editor_name == "叶文涛" else ""
+    topic.update(report_scores(payload))
+    return topic
+
+
+def run_bpm_submit(payload: dict) -> dict:
+    if not BPM_SCRIPT.exists():
+        raise FileNotFoundError(f"BPM skill 脚本不存在: {BPM_SCRIPT}")
+    credentials = payload.get("bpm") or {}
+    bpm_user = (credentials.get("user") or os.environ.get("BPM_USER") or "").strip()
+    bpm_password = (credentials.get("password") or os.environ.get("BPM_PASSWORD") or "").strip()
+    bpm_url = (credentials.get("url") or os.environ.get("BPM_URL") or "http://bpm.phei.com.cn:8088/portal/r/w").strip()
+    if not bpm_user or not bpm_password:
+        raise ValueError("请填写 BPM 账号和密码。")
+
+    topic = merge_bpm_topic(payload)
+    if not clean_person_name(str(topic.get("authorName", ""))):
+        raise ValueError("没有识别到有效作者姓名，请检查申报表中的作者姓名字段。")
+
+    run_root = ROOT / "output" / "bpm-runs"
+    run_root.mkdir(parents=True, exist_ok=True)
+    run_dir = run_root / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    topic_path = run_dir / "topic.json"
+    topic_path.write_text(json.dumps(topic, ensure_ascii=False, indent=2), encoding="utf-8")
+    env = os.environ.copy()
+    env.update(
+        {
+            "BPM_USER": bpm_user,
+            "BPM_PASSWORD": bpm_password,
+            "BPM_URL": bpm_url,
+            "NODE_PATH": str(NODE_MODULES),
+        }
+    )
+    completed = subprocess.run(
+        ["node", str(BPM_SCRIPT), "submit", str(topic_path)],
+        cwd=str(ROOT),
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=180,
+        check=False,
+    )
+    (run_dir / "stdout.txt").write_text(completed.stdout or "", encoding="utf-8")
+    (run_dir / "stderr.txt").write_text(completed.stderr or "", encoding="utf-8")
+    if completed.returncode != 0:
+        detail = (completed.stderr.strip() or completed.stdout.strip() or "BPM 暂存失败")
+        raise RuntimeError(f"{detail}\n运行记录已保存：{run_dir}")
+    result = json.loads(completed.stdout)
+    result["runDir"] = str(run_dir)
+    if not result.get("ok"):
+        expected = result.get("expectedBookName") or topic.get("bookName") or "选题"
+        raise RuntimeError(f"BPM 暂存未验证成功：没有在待办列表找到《{expected}》。可能只创建了流程或保存被 BPM 拦截。运行记录已保存：{run_dir}")
+    return result
+
+
+def now_iso() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def bpm_topic_preview(topic: dict) -> dict:
+    keys = [
+        "bookName",
+        "authorName",
+        "class1",
+        "class2",
+        "class3",
+        "class4",
+        "gbClass",
+        "readLevel",
+        "bwClass",
+        "bwCipClass",
+        "readerNum",
+        "scriptSource",
+        "words",
+        "price",
+        "remPayMode",
+        "remStandard",
+        "digital",
+        "eRemPayMode",
+        "totalNum",
+        "firstNum",
+        "projectEditor",
+        "editor",
+        "feature",
+        "compare",
+        "scoreTotal",
+    ]
+    return {key: topic.get(key, "") for key in keys}
+
+
+def append_job_log(job_id: str, message: str):
+    with JOB_LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            return
+        job["updatedAt"] = now_iso()
+        job.setdefault("logs", []).append(f"{job['updatedAt']} {message}")
+
+
+def update_job(job_id: str, **updates):
+    with JOB_LOCK:
+        job = JOBS.get(job_id)
+        if not job:
+            return
+        job.update(updates)
+        job["updatedAt"] = now_iso()
+
+
+def public_jobs() -> list[dict]:
+    with JOB_LOCK:
+        jobs = sorted(JOBS.values(), key=lambda item: item["createdAt"], reverse=True)
+        return [dict(job) for job in jobs]
+
+
+def create_bpm_job(payload: dict) -> dict:
+    credentials = payload.get("bpm") or {}
+    bpm_user = (credentials.get("user") or "").strip()
+    bpm_password = credentials.get("password") or ""
+    if not bpm_user or not bpm_password:
+        raise ValueError("请填写 BPM 账号和密码。")
+    sections = payload.get("sections") or []
+    if len(sections) < 6 or any(not section.get("text") for section in sections):
+        raise ValueError("请先生成完整的一到六部分报告内容。")
+    unconfirmed = [section for section in sections if not section.get("confirmed")]
+    if unconfirmed:
+        raise ValueError(f"还有 {len(unconfirmed)} 段未确认，不能加入 BPM 队列。")
+
+    topic = merge_bpm_topic(payload)
+    if not clean_person_name(str(topic.get("authorName", ""))):
+        raise ValueError("没有识别到有效作者姓名，请检查申报表中的作者姓名字段。")
+    job_id = uuid.uuid4().hex[:12]
+    created = now_iso()
+    job = {
+        "id": job_id,
+        "title": topic.get("bookName") or payload.get("title") or "选题策划报告",
+        "status": "queued",
+        "createdAt": created,
+        "updatedAt": created,
+        "createdBy": bpm_user,
+        "topicPreview": bpm_topic_preview(topic),
+        "logs": [f"{created} 已加入 BPM 暂存队列"],
+        "result": None,
+        "error": None,
+    }
+    with JOB_LOCK:
+        JOBS[job_id] = job
+        old_ids = sorted(JOBS, key=lambda key: JOBS[key]["createdAt"], reverse=True)[MAX_JOBS:]
+        for old_id in old_ids:
+            if JOBS[old_id]["status"] not in {"running", "queued"}:
+                JOBS.pop(old_id, None)
+    JOB_QUEUE.put((job_id, payload))
+    return dict(job)
+
+
+def bpm_job_worker():
+    while True:
+        job_id, payload = JOB_QUEUE.get()
+        update_job(job_id, status="running", error=None)
+        append_job_log(job_id, "开始登录 BPM 并填写选题申报")
+        try:
+            result = run_bpm_submit(payload)
+            update_job(job_id, status="completed", result=result, error=None)
+            title = result.get("title") or result.get("expectedBookName") or "选题申报草稿"
+            append_job_log(job_id, f"BPM 暂存完成：{title}")
+        except Exception as exc:
+            update_job(job_id, status="failed", error=str(exc), result=None)
+            append_job_log(job_id, f"BPM 暂存失败：{exc}")
+        finally:
+            payload.get("bpm", {}).pop("password", None)
+            JOB_QUEUE.task_done()
+
+
+threading.Thread(target=bpm_job_worker, daemon=True).start()
+
+
+def extract_json_from_text(text: str) -> dict:
+    text = text.strip()
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.S)
+    if fence:
+        text = fence.group(1)
+    else:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            text = text[start : end + 1]
+    return json.loads(text)
+
+
+def normalize_model_url(url: str) -> str:
+    url = (url or DEFAULT_MODEL_URL).strip().rstrip("/")
+    if not url.endswith("/chat/completions"):
+        if url.endswith("/v1"):
+            url += "/chat/completions"
+        else:
+            url += "/v1/chat/completions"
+    return url
+
+
+def build_prompt(facts: dict) -> str:
+    report_rules = read_text(REPORT_RULES)
+    scoring_rules = read_text(SCORING_RULES)
+    source = json.dumps(compact_facts(facts), ensure_ascii=False, indent=2)
+    return f"""
+你是电子工业出版社教育出版板块责任编辑助手。请严格依据申报表事实和下方 skill 规则，生成选题策划报告一到六部分、建议评分和待确认信息。
+
+	硬性要求：
+	1. 只输出 JSON，不要输出 Markdown 解释。
+	2. 一到六每个正文段落必须以两个全角空格开头：`　　`。
+	3. 不得编造定价、版税、包销、资助、毛利润、获奖、版权授权等精确信息；缺失则写入 pending_questions。
+	4. 第五部分“成本与盈利估算”必须使用下方固定文本，不得改写、补充或替换数字：
+	{FIXED_PROFIT_SECTION_TEXT}
+	5. 除第五部分外，一、二、三、四、六必须先依据申报表生成内容，再按下方“范文润色规则”重写成更成熟的上会材料；不要保留流水账、表格腔或申报表原话堆砌。
+	6. BPM 填报分类中，一级分类固定为“教育”，二级分类固定为“本科研究生”，国标分类固定为“G”，层次固定为“高等理工”；你只需要根据选题内容理解，给出最合适的三级分类和四级分类建议，可填 BPM 下拉框文本或代码，不确定则留空。
+	7. 额外生成 BPM 填报专用字段：
+	   - `bpmFields.feature` 是“选题特色”，按“内容范围、写作特点、实践教学、教学资源建设、其他特点”五项写，每项 1 句，适合直接填入 BPM 文本框。
+	   - `bpmFields.compare` 是“同类选题比较”，如果申报表已有同类选题比较则提炼改写；如果没有，则依据选题定位生成一段谨慎的同类教材/同类选题比较，避免编造具体销量、排名、精确市场数据。
+	8. 额外生成 `authorMaintenance.bio`：如果申报表已有作者简介则提炼为 50-1000 字；如果没有作者简介但 `author_official_search_context` 中有学校/学院/单位官网摘要，则优先依据这些公开摘要和申报表事实写作者简介；如果两者都不足，则只根据申报表中作者单位、职称、学历、研究/教学经历、项目、获奖、著作等已知事实，写一段可用于 BPM 作译者维护的作者简介。不得编造精确头衔、项目名称、获奖名称或联系方式。作者姓名不要从“作者情况”正文推断；如申报表没有独立姓名字段但有“合作者情况简介（姓名、年龄、职称、工作单位等）”，以该栏首位作者姓名为准。
+	9. 评分按保守口径，总分通常控制在 60-70；除非材料非常强，不要超过 70。
+	10. 输出字段必须符合下面 JSON 结构：
+{{
+  "title": "选题名称",
+  "sections": [
+    {{"key": "content", "title": "一、选题内容", "text": "..."}},
+    {{"key": "author", "title": "二、作者情况", "text": "..."}},
+    {{"key": "feasibility", "title": "三、策划过程与可行性", "text": "..."}},
+    {{"key": "award", "title": "四、获奖潜质", "text": "..."}},
+    {{"key": "profit", "title": "五、成本与盈利估算", "text": "..."}},
+    {{"key": "marketing", "title": "六、市场定位与营销", "text": "..."}}
+  ],
+  "scores": [
+    ["选题内容", 35, 30],
+    ["作者情况", 10, 5],
+    ["策划过程与可行性", 5, 5],
+    ["获奖潜质", 5, 0],
+    ["成本与盈利估算", 35, 17],
+    ["市场定位与营销", 10, 8]
+  ],
+  "pending_questions": ["..."],
+  "bpmClassification": {{"class3": "三级分类建议", "class4": "四级分类建议"}},
+  "bpmFields": {{
+    "feature": "内容范围：...\\n写作特点：...\\n实践教学：...\\n教学资源建设：...\\n其他特点：...",
+    "compare": "同类选题比较..."
+  }},
+  "authorMaintenance": {{
+    "bio": "作者简介，50-1000字"
+  }}
+}}
+
+	【报告生成规则】
+	{report_rules}
+
+	【范文润色规则】
+	{AI_REPORT_STYLE_GUIDE}
+
+	【评分规则】
+{scoring_rules}
+
+【申报表抽取信息】
+{source}
+""".strip()
+
+
+def call_model(prompt: str, model_url: str, api_key: str, model: str) -> dict:
+    endpoint = normalize_model_url(model_url)
+    resolved_api_key = (api_key or DEFAULT_API_KEY).strip()
+    if not resolved_api_key:
+        raise ValueError("请填写模型 API Key，或在启动服务前设置 DEEPSEEK_API_KEY 环境变量。")
+    payload = {
+        "model": (model or DEFAULT_MODEL).strip(),
+        "messages": [
+            {"role": "system", "content": "你只输出严格 JSON。"},
+            {"role": "user", "content": prompt},
+        ],
+        "temperature": 0.2,
+        "stream": False,
+    }
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        endpoint,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {resolved_api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            body = response.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"模型接口错误 {exc.code}: {detail}") from exc
+    result = json.loads(body)
+    content = result["choices"][0]["message"]["content"]
+    return extract_json_from_text(content)
+
+
+def normalize_generated(result: dict) -> dict:
+    sections = []
+    section_map = {section.get("key"): section for section in result.get("sections", [])}
+    for key, title in SECTION_TITLES.items():
+        source = section_map.get(key, {})
+        text = FIXED_PROFIT_SECTION_TEXT if key == "profit" else ensure_indent(source.get("text", ""))
+        sections.append(
+            {
+                "key": key,
+                "title": source.get("title") or title,
+                "text": text,
+                "confirmed": False,
+            }
+        )
+
+    raw_scores = result.get("scores") or []
+    score_map = {item[0]: item for item in raw_scores if isinstance(item, list) and len(item) >= 3}
+    max_scores = {
+        "选题内容": 35,
+        "作者情况": 10,
+        "策划过程与可行性": 5,
+        "获奖潜质": 5,
+        "成本与盈利估算": 35,
+        "市场定位与营销": 10,
+    }
+    scores = []
+    for name, max_score in max_scores.items():
+        value = score_map.get(name, [name, max_score, 0])[2]
+        try:
+            value = max(0, min(max_score, int(value)))
+        except Exception:
+            value = 0
+        scores.append([name, max_score, value])
+    total = sum(item[2] for item in scores)
+    bpm_classification = result.get("bpmClassification") or result.get("bpm_classification") or {}
+    bpm_fields = result.get("bpmFields") or result.get("bpm_fields") or {}
+    author_maintenance = result.get("authorMaintenance") or result.get("author_maintenance") or {}
+    return {
+        "title": result.get("title") or "选题策划报告",
+        "sections": sections,
+        "scores": scores,
+        "total": total,
+        "pending_questions": result.get("pending_questions") or [],
+        "bpmClassification": {
+            "class3": str(bpm_classification.get("class3", "") or "").strip(),
+            "class4": str(bpm_classification.get("class4", "") or "").strip(),
+        },
+        "bpmFields": {
+            "feature": str(bpm_fields.get("feature", "") or "").strip(),
+            "compare": str(bpm_fields.get("compare", "") or "").strip(),
+        },
+        "authorMaintenance": {
+            "bio": str(author_maintenance.get("bio", "") or "").strip() if isinstance(author_maintenance, dict) else "",
+        },
+    }
+
+
+def parse_score(value: str, default: int = 0) -> int:
+    match = re.search(r"\d+", str(value or ""))
+    return int(match.group(0)) if match else default
+
+
+def docx_unique_row_text(row) -> list[str]:
+    seen = []
+    cells = []
+    for cell in row.cells:
+        if cell._tc in seen:
+            continue
+        seen.append(cell._tc)
+        cells.append(strip_indent(cell.text))
+    return cells
+
+
+def extract_report_from_template_table(doc: Document) -> dict:
+    if not doc.tables:
+        return {}
+    table = doc.tables[0]
+    if len(table.rows) < 13:
+        return {}
+    section_keys = ["content", "author", "feasibility", "award", "profit", "marketing"]
+    sections = []
+    scores = []
+    for offset, key in enumerate(section_keys, start=7):
+        cells = docx_unique_row_text(table.rows[offset])
+        if len(cells) < 3:
+            continue
+        section_name = SCORE_NAMES[key]
+        max_score = {
+            "content": 35,
+            "author": 10,
+            "feasibility": 5,
+            "award": 5,
+            "profit": 35,
+            "marketing": 10,
+        }[key]
+        text = cells[2] if len(cells) >= 3 else ""
+        score = parse_score(cells[3] if len(cells) >= 4 else "", 0)
+        sections.append(
+            {
+                "key": key,
+                "title": SECTION_TITLES[key],
+                "text": ensure_indent(text),
+                "confirmed": True,
+            }
+        )
+        scores.append([section_name, max_score, max(0, min(max_score, score))])
+    if len(sections) != 6:
+        return {}
+    title = ""
+    editor_name = ""
+    try:
+        title = docx_unique_row_text(table.rows[2])[1]
+    except Exception:
+        title = ""
+    try:
+        editor_name = docx_unique_row_text(table.rows[3])[1]
+    except Exception:
+        editor_name = ""
+    total = sum(item[2] for item in scores)
+    return {
+        "title": safe_name(title or "选题策划报告"),
+        "editorName": strip_indent(editor_name),
+        "sections": sections,
+        "scores": scores,
+        "total": total,
+        "pending_questions": [],
+    }
+
+
+def extract_report_from_plain_text(doc: Document) -> dict:
+    chunks = []
+    for paragraph in doc.paragraphs:
+        text = strip_indent(paragraph.text)
+        if text:
+            chunks.append(text)
+    for table in doc.tables:
+        for row in table.rows:
+            for cell in docx_unique_row_text(row):
+                if cell:
+                    chunks.append(cell)
+    text = "\n".join(chunks)
+    if not text:
+        return {}
+    title_match = re.search(r"《([^》]+)》?选题策划报告|选题名称[:：\s]*([^\n]+)", text)
+    title = title_match.group(1) or title_match.group(2) if title_match else "选题策划报告"
+    headings = [
+        ("content", r"一[、.．]\s*选题内容"),
+        ("author", r"二[、.．]\s*作者情况"),
+        ("feasibility", r"三[、.．]\s*策划过程与可行性"),
+        ("award", r"四[、.．]\s*获奖潜质"),
+        ("profit", r"五[、.．]\s*成本与盈利估算"),
+        ("marketing", r"六[、.．]\s*市场定位与营销"),
+    ]
+    positions = []
+    for key, pattern in headings:
+        match = re.search(pattern, text)
+        if match:
+            positions.append((match.start(), match.end(), key))
+    positions.sort()
+    if len(positions) < 6:
+        return {}
+    sections = []
+    scores = []
+    max_scores = {
+        "content": 35,
+        "author": 10,
+        "feasibility": 5,
+        "award": 5,
+        "profit": 35,
+        "marketing": 10,
+    }
+    defaults = {
+        "content": 30,
+        "author": 4,
+        "feasibility": 5,
+        "award": 0,
+        "profit": 17,
+        "marketing": 9,
+    }
+    for index, (_, end, key) in enumerate(positions):
+        next_start = positions[index + 1][0] if index + 1 < len(positions) else len(text)
+        body = text[end:next_start].strip()
+        score_match = re.search(r"(?:自评分|建议分|评分)[:：\s]*(\d+)", body)
+        score = parse_score(score_match.group(1), defaults[key]) if score_match else defaults[key]
+        body = re.sub(r"(?:自评分|建议分|评分)[:：\s]*\d+", "", body).strip()
+        sections.append({"key": key, "title": SECTION_TITLES[key], "text": ensure_indent(body), "confirmed": True})
+        scores.append([SCORE_NAMES[key], max_scores[key], max(0, min(max_scores[key], score))])
+    return {
+        "title": safe_name(title or "选题策划报告"),
+        "editorName": "",
+        "sections": sections,
+        "scores": scores,
+        "total": sum(item[2] for item in scores),
+        "pending_questions": [],
+    }
+
+
+def extract_planning_report_docx(path: Path) -> dict:
+    doc = Document(str(path))
+    extracted = extract_report_from_template_table(doc) or extract_report_from_plain_text(doc)
+    if not extracted:
+        raise ValueError("没有从选题策划报告中识别到一到六部分内容，请确认上传的是选题策划报告 DOCX。")
+    section_map = {section["key"]: section for section in extracted["sections"]}
+    extracted["bpmFields"] = {
+        "feature": strip_indent(section_map.get("content", {}).get("text", "")),
+        "compare": strip_indent(section_map.get("marketing", {}).get("text", "")),
+    }
+    extracted["authorMaintenance"] = {"bio": strip_indent(section_map.get("author", {}).get("text", ""))}
+    return extracted
+
+
+def import_bpm_sources(application_bytes: bytes, application_name: str, report_bytes: bytes, report_name: str) -> dict:
+    for filename in [application_name, report_name]:
+        if Path(filename or "").suffix.lower() != ".docx":
+            raise ValueError("请上传 .docx 格式的选题申报表和选题策划报告。")
+    application_path = None
+    report_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+            tmp.write(application_bytes)
+            application_path = Path(tmp.name)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as tmp:
+            tmp.write(report_bytes)
+            report_path = Path(tmp.name)
+        extractor = load_extractor()
+        facts = extractor.build_payload(application_path, include_sensitive=True)
+        report = extract_planning_report_docx(report_path)
+        normalized = normalize_generated(report)
+        normalized["title"] = report.get("title") or normalized["title"]
+        for section in normalized["sections"]:
+            section["confirmed"] = True
+        normalized["bpmFields"] = report.get("bpmFields", normalized.get("bpmFields", {}))
+        normalized["authorMaintenance"] = report.get("authorMaintenance", normalized.get("authorMaintenance", {}))
+        normalized["bpmTopic"] = build_bpm_topic(facts, normalized)
+        normalized["sourceMode"] = "application-plus-report"
+        return normalized
+    finally:
+        for path_obj in [application_path, report_path]:
+            if path_obj:
+                try:
+                    path_obj.unlink()
+                except OSError:
+                    pass
+
+
+def generate_report_from_upload(file_bytes: bytes, filename: str, model_url: str, api_key: str, model: str) -> dict:
+    suffix = Path(filename or "application.docx").suffix or ".docx"
+    if suffix.lower() != ".docx":
+        raise ValueError("请上传 .docx 格式的选题申报表，暂不支持 .doc 或其他文件格式。")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+        tmp.write(file_bytes)
+        tmp_path = Path(tmp.name)
+    try:
+        extractor = load_extractor()
+        facts = extractor.build_payload(tmp_path, include_sensitive=False)
+        prompt = build_prompt(facts)
+        result = call_model(prompt, model_url, api_key, model)
+        normalized = normalize_generated(result)
+        normalized["bpmTopic"] = build_bpm_topic(facts, normalized)
+        return normalized
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+
+
+class Handler(SimpleHTTPRequestHandler):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, directory=str(ROOT), **kwargs)
+
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
+    def do_GET(self):
+        path = unquote(self.path.split("?", 1)[0])
+        if path == "/api/health":
+            body = json.dumps({"ok": True, "time": now_iso()}, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if path == "/api/bpm-jobs":
+            body = json.dumps({"jobs": public_jobs()}, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        super().do_GET()
+
+    def do_POST(self):
+        path = unquote(self.path)
+        if path == "/api/generate-report":
+            self.handle_generate_report()
+            return
+        if path == "/api/import-bpm-sources":
+            self.handle_import_bpm_sources()
+            return
+        if path == "/api/bpm-jobs":
+            self.handle_bpm_job()
+            return
+        if path == "/api/bpm-submit":
+            self.handle_bpm_submit()
+            return
+        if path != "/api/export-docx":
+            self.send_error(404)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            out = build_docx(payload)
+            data = out.read_bytes()
+            filename = out.name
+            self.send_response(200)
+            self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Content-Disposition", f"attachment; filename*=UTF-8''{quote(filename)}")
+            self.end_headers()
+            self.wfile.write(data)
+        except Exception as exc:
+            body = str(exc).encode("utf-8")
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def handle_bpm_job(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            result = create_bpm_job(payload)
+            body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as exc:
+            body = str(exc).encode("utf-8")
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def handle_bpm_submit(self):
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            result = run_bpm_submit(payload)
+            body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        except Exception as exc:
+            body = str(exc).encode("utf-8")
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def handle_generate_report(self):
+        try:
+            runtime_log(f"generate-report start from={self.client_address[0]} length={self.headers.get('Content-Length', '0')}")
+            form = cgi.FieldStorage(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={
+                    "REQUEST_METHOD": "POST",
+                    "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+                    "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
+                },
+            )
+            file_item = form["file"] if "file" in form else None
+            if file_item is None or not getattr(file_item, "file", None):
+                raise ValueError("请上传选题申报表 DOCX 文件。")
+            file_bytes = file_item.file.read()
+            filename = getattr(file_item, "filename", "application.docx")
+            runtime_log(f"generate-report file filename={filename} bytes={len(file_bytes)}")
+            model_url = form.getfirst("modelUrl", DEFAULT_MODEL_URL)
+            api_key = form.getfirst("apiKey") or DEFAULT_API_KEY
+            model = form.getfirst("model", DEFAULT_MODEL)
+            result = generate_report_from_upload(file_bytes, filename, model_url, api_key, model)
+            body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            runtime_log(f"generate-report ok title={result.get('title', '')} bytes={len(body)}")
+        except Exception as exc:
+            runtime_log(f"generate-report error {type(exc).__name__}: {exc}")
+            body = str(exc).encode("utf-8")
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+    def handle_import_bpm_sources(self):
+        try:
+            runtime_log(f"import-bpm-sources start from={self.client_address[0]} length={self.headers.get('Content-Length', '0')}")
+            form = cgi.FieldStorage(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={
+                    "REQUEST_METHOD": "POST",
+                    "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+                    "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
+                },
+            )
+            application_item = form["application"] if "application" in form else None
+            report_item = form["report"] if "report" in form else None
+            if application_item is None or not getattr(application_item, "file", None):
+                raise ValueError("请上传选题申报表 DOCX。")
+            if report_item is None or not getattr(report_item, "file", None):
+                raise ValueError("请上传选题策划报告 DOCX。")
+            application_bytes = application_item.file.read()
+            report_bytes = report_item.file.read()
+            application_name = getattr(application_item, "filename", "application.docx")
+            report_name = getattr(report_item, "filename", "report.docx")
+            result = import_bpm_sources(application_bytes, application_name, report_bytes, report_name)
+            body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            runtime_log(f"import-bpm-sources ok title={result.get('title', '')} bytes={len(body)}")
+        except Exception as exc:
+            runtime_log(f"import-bpm-sources error {type(exc).__name__}: {exc}")
+            body = str(exc).encode("utf-8")
+            self.send_response(500)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+
+def main():
+    host = os.environ.get("PHEI_HOST", "127.0.0.1")
+    port = int(os.environ.get("PHEI_PORT", "4174"))
+    server = ThreadingHTTPServer((host, port), Handler)
+    print(f"Serving http://{host}:{port}/index.html")
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
