@@ -17,6 +17,7 @@ test('buttons use separate backend endpoints', () => {
 
 test('author copy no longer promises automatic creation', () => {
   assert.doesNotMatch(source, /BPM 填报时会先新增作译者/);
+  assert.doesNotMatch(source, /将自动准备 BPM 新增作译者数据/);
   assert.match(source, /可单独新增至 BPM 作译者库/);
 });
 
