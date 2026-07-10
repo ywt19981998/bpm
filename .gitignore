@@ -8,5 +8,6 @@ __pycache__/
 server.pid
 output/
 .playwright-cli/
+.worktrees/
 bpm-*.png
 bpm-*.json
