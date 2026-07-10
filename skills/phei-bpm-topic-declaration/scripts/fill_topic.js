@@ -1189,12 +1189,9 @@ async function inspectDepartmentPicker(outputDirArg) {
   }
 }
 
-async function submit(jsonPath) {
+async function submitTopic(jsonPath) {
   const { absPath, data } = loadInput(jsonPath);
   const topic = withDefaults(data);
-  if (!isValidPersonName(topic.authorName)) {
-    throw new Error(`Invalid authorName: "${String(topic.authorName || '').slice(0, 80)}". Please provide a 2-8 character Chinese author name.`);
-  }
   const outputDir = path.dirname(absPath);
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1600, height: 1400 } });
@@ -1207,7 +1204,6 @@ async function submit(jsonPath) {
     });
 
     await login(page);
-    const authorResult = await saveAuthorMaintenance(page, topic, outputDir);
     const { popup, formFrame } = await openTopicPopup(page);
     await fillForm(formFrame, topic);
 
@@ -1239,7 +1235,6 @@ async function submit(jsonPath) {
       verification,
       dialogs,
       expectedBookName: topic.bookName,
-      authorResult,
       inputPath: absPath,
       screenshots: [
         mainBefore,
@@ -1255,6 +1250,39 @@ async function submit(jsonPath) {
       const oldTitleMessage = verification.bookNameOnly ? ` Found another matching book title: "${verification.bookNameOnly}".` : '';
       throw new Error(`BPM save was not verified: "${topic.bookName}"${cnoMessage} was not found in the worklist after save.${cnoOnlyMessage}${oldTitleMessage}`);
     }
+  } finally {
+    await browser.close();
+  }
+}
+
+async function submitAuthor(jsonPath) {
+  const { absPath, data } = loadInput(jsonPath);
+  const topic = withDefaults(data);
+  const authorName = topic.authorMaintenance?.name || topic.authorName;
+  const authorBio = String(topic.authorMaintenance?.bio || '').trim();
+  if (!isValidPersonName(authorName)) {
+    throw new Error(`Invalid authorName: "${String(authorName || '').slice(0, 80)}". Please provide a 2-8 character Chinese author name.`);
+  }
+  if (!authorBio) throw new Error('Author bio is required');
+  topic.authorMaintenance.enabled = true;
+
+  const outputDir = path.dirname(absPath);
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1400 } });
+
+  try {
+    await login(page);
+    const authorResult = await saveAuthorMaintenance(page, topic, outputDir);
+    if (authorResult.skipped) {
+      throw new Error(authorResult.reason || 'Author maintenance was skipped');
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      mode: 'submit-author',
+      authorName,
+      authorResult,
+      inputPath: absPath,
+    }, null, 2));
   } finally {
     await browser.close();
   }
@@ -1344,10 +1372,15 @@ async function main() {
     await debugMain(jsonPath);
     return;
   }
-  if (mode !== 'submit' || !jsonPath) {
-    throw new Error('Usage: node fill_topic.js inspect [/abs/output/dir] OR node fill_topic.js inspect-picker [/abs/output/dir] OR node fill_topic.js inspect-department-picker [/abs/output/dir] OR node fill_topic.js dry-run /abs/path/topic.json OR node fill_topic.js debug-main /abs/path/topic.json OR node fill_topic.js submit /abs/path/topic.json');
+  if (mode === 'submit-author' && jsonPath) {
+    await submitAuthor(jsonPath);
+    return;
   }
-  await submit(jsonPath);
+  if ((mode === 'submit-topic' || mode === 'submit') && jsonPath) {
+    await submitTopic(jsonPath);
+    return;
+  }
+  throw new Error('Usage: node fill_topic.js inspect [/abs/output/dir] OR node fill_topic.js inspect-picker [/abs/output/dir] OR node fill_topic.js inspect-department-picker [/abs/output/dir] OR node fill_topic.js dry-run /abs/path/topic.json OR node fill_topic.js debug-main /abs/path/topic.json OR node fill_topic.js submit-topic /abs/path/topic.json OR node fill_topic.js submit-author /abs/path/topic.json');
 }
 
 main().catch((err) => {

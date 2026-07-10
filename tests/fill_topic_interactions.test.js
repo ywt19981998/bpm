@@ -13,6 +13,32 @@ const scriptPath = path.join(
 );
 const source = fs.readFileSync(scriptPath, 'utf8');
 
+function functionBody(name) {
+  const start = source.indexOf(`async function ${name}(`);
+  assert.notEqual(start, -1, `${name} must exist`);
+  const next = source.indexOf('\nasync function ', start + 1);
+  return source.slice(start, next === -1 ? source.length : next);
+}
+
+test('submitTopic never maintains authors', () => {
+  const body = functionBody('submitTopic');
+  assert.doesNotMatch(body, /saveAuthorMaintenance/);
+  assert.match(body, /openTopicPopup/);
+  assert.match(body, /fillScoreGrid/);
+  assert.match(body, /fillCostEstimateForm/);
+});
+
+test('submitAuthor only maintains authors', () => {
+  const body = functionBody('submitAuthor');
+  assert.match(body, /saveAuthorMaintenance/);
+  assert.doesNotMatch(body, /openTopicPopup|fillScoreGrid|fillCostEstimateForm/);
+});
+
+test('CLI exposes isolated topic and author modes', () => {
+  assert.match(source, /mode === 'submit-author'/);
+  assert.match(source, /mode === 'submit-topic'/);
+});
+
 test('BPM form changes use Playwright controls instead of direct DOM or Ext mutation', () => {
   assert.match(source, /\.fill\(/);
 });
