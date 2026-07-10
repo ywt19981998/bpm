@@ -850,7 +850,7 @@ def merge_bpm_topic(payload: dict) -> dict:
     return topic
 
 
-def run_bpm_submit(payload: dict) -> dict:
+def run_bpm_script(payload: dict, mode: str, failure_label: str) -> dict:
     if not BPM_SCRIPT.exists():
         raise FileNotFoundError(f"BPM skill 脚本不存在: {BPM_SCRIPT}")
     credentials = payload.get("bpm") or {}
@@ -861,9 +861,6 @@ def run_bpm_submit(payload: dict) -> dict:
         raise ValueError("请填写 BPM 账号和密码。")
 
     topic = merge_bpm_topic(payload)
-    if not clean_person_name(str(topic.get("authorName", ""))):
-        raise ValueError("没有识别到有效作者姓名，请检查申报表中的作者姓名字段。")
-
     run_root = ROOT / "output" / "bpm-runs"
     run_root.mkdir(parents=True, exist_ok=True)
     run_dir = run_root / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
@@ -880,7 +877,7 @@ def run_bpm_submit(payload: dict) -> dict:
         }
     )
     completed = subprocess.run(
-        ["node", str(BPM_SCRIPT), "submit", str(topic_path)],
+        ["node", str(BPM_SCRIPT), mode, str(topic_path)],
         cwd=str(ROOT),
         env=env,
         text=True,
@@ -892,14 +889,41 @@ def run_bpm_submit(payload: dict) -> dict:
     (run_dir / "stdout.txt").write_text(completed.stdout or "", encoding="utf-8")
     (run_dir / "stderr.txt").write_text(completed.stderr or "", encoding="utf-8")
     if completed.returncode != 0:
-        detail = (completed.stderr.strip() or completed.stdout.strip() or "BPM 暂存失败")
+        detail = completed.stderr.strip() or completed.stdout.strip() or f"{failure_label}失败"
         raise RuntimeError(f"{detail}\n运行记录已保存：{run_dir}")
     result = json.loads(completed.stdout)
     result["runDir"] = str(run_dir)
     if not result.get("ok"):
-        expected = result.get("expectedBookName") or topic.get("bookName") or "选题"
-        raise RuntimeError(f"BPM 暂存未验证成功：没有在待办列表找到《{expected}》。可能只创建了流程或保存被 BPM 拦截。运行记录已保存：{run_dir}")
+        raise RuntimeError(f"{failure_label}未验证成功。运行记录已保存：{run_dir}")
     return result
+
+
+def run_bpm_topic_submit(payload: dict) -> dict:
+    result = run_bpm_script(payload, "submit-topic", "BPM 选题暂存")
+    if not result.get("title"):
+        expected = result.get("expectedBookName") or merge_bpm_topic(payload).get("bookName") or "选题"
+        raise RuntimeError(f"BPM 选题暂存未验证成功：没有在待办列表找到《{expected}》。")
+    return result
+
+
+def run_bpm_author_submit(payload: dict) -> dict:
+    topic = merge_bpm_topic(payload)
+    author = topic.get("authorMaintenance") if isinstance(topic.get("authorMaintenance"), dict) else {}
+    author_name = clean_person_name(str(author.get("name", "")))
+    author_bio = str(author.get("bio", "")).strip()
+    if not author_name:
+        raise ValueError("没有识别到有效作者姓名，请检查申报表中的作者姓名字段。")
+    if not author_bio:
+        raise ValueError("作者简介为空，不能新增作译者。")
+    author["enabled"] = True
+    topic["authorMaintenance"] = author
+    author_payload = deepcopy(payload)
+    author_payload["bpmTopic"] = topic
+    return run_bpm_script(author_payload, "submit-author", "BPM 作译者保存")
+
+
+def run_bpm_submit(payload: dict) -> dict:
+    return run_bpm_topic_submit(payload)
 
 
 def now_iso() -> str:
@@ -961,33 +985,45 @@ def public_jobs() -> list[dict]:
         return [dict(job) for job in jobs]
 
 
-def create_bpm_job(payload: dict) -> dict:
+def create_bpm_job(payload: dict, job_type: str = "topic") -> dict:
+    if job_type not in {"topic", "author"}:
+        raise ValueError(f"不支持的 BPM 任务类型：{job_type}")
     credentials = payload.get("bpm") or {}
     bpm_user = (credentials.get("user") or "").strip()
     bpm_password = credentials.get("password") or ""
     if not bpm_user or not bpm_password:
         raise ValueError("请填写 BPM 账号和密码。")
-    sections = payload.get("sections") or []
-    if len(sections) < 6 or any(not section.get("text") for section in sections):
-        raise ValueError("请先生成完整的一到六部分报告内容。")
-    unconfirmed = [section for section in sections if not section.get("confirmed")]
-    if unconfirmed:
-        raise ValueError(f"还有 {len(unconfirmed)} 段未确认，不能加入 BPM 队列。")
-
     topic = merge_bpm_topic(payload)
-    if not clean_person_name(str(topic.get("authorName", ""))):
-        raise ValueError("没有识别到有效作者姓名，请检查申报表中的作者姓名字段。")
+    if job_type == "topic":
+        sections = payload.get("sections") or []
+        if len(sections) < 6 or any(not section.get("text") for section in sections):
+            raise ValueError("请先生成完整的一到六部分报告内容。")
+        unconfirmed = [section for section in sections if not section.get("confirmed")]
+        if unconfirmed:
+            raise ValueError(f"还有 {len(unconfirmed)} 段未确认，不能加入 BPM 队列。")
+        job_title = topic.get("bookName") or payload.get("title") or "选题策划报告"
+        job_label = "选题填报"
+    else:
+        author = topic.get("authorMaintenance") if isinstance(topic.get("authorMaintenance"), dict) else {}
+        author_name = clean_person_name(str(author.get("name", "")))
+        if not author_name:
+            raise ValueError("没有识别到有效作者姓名，请检查申报表中的作者姓名字段。")
+        if not str(author.get("bio", "")).strip():
+            raise ValueError("作者简介为空，不能新增作译者。")
+        job_title = author_name
+        job_label = "作译者维护"
     job_id = uuid.uuid4().hex[:12]
     created = now_iso()
     job = {
         "id": job_id,
-        "title": topic.get("bookName") or payload.get("title") or "选题策划报告",
+        "type": job_type,
+        "title": job_title,
         "status": "queued",
         "createdAt": created,
         "updatedAt": created,
         "createdBy": bpm_user,
         "topicPreview": bpm_topic_preview(topic),
-        "logs": [f"{created} 已加入 BPM 暂存队列"],
+        "logs": [f"{created} 已加入{job_label}队列"],
         "result": None,
         "error": None,
     }
@@ -997,23 +1033,24 @@ def create_bpm_job(payload: dict) -> dict:
         for old_id in old_ids:
             if JOBS[old_id]["status"] not in {"running", "queued"}:
                 JOBS.pop(old_id, None)
-    JOB_QUEUE.put((job_id, payload))
+    JOB_QUEUE.put((job_id, job_type, payload))
     return dict(job)
 
 
 def bpm_job_worker():
     while True:
-        job_id, payload = JOB_QUEUE.get()
+        job_id, job_type, payload = JOB_QUEUE.get()
+        job_label = "作译者维护" if job_type == "author" else "选题填报"
         update_job(job_id, status="running", error=None)
-        append_job_log(job_id, "开始登录 BPM 并填写选题申报")
+        append_job_log(job_id, f"开始登录 BPM 并执行{job_label}")
         try:
-            result = run_bpm_submit(payload)
+            result = run_bpm_author_submit(payload) if job_type == "author" else run_bpm_topic_submit(payload)
             update_job(job_id, status="completed", result=result, error=None)
-            title = result.get("title") or result.get("expectedBookName") or "选题申报草稿"
-            append_job_log(job_id, f"BPM 暂存完成：{title}")
+            title = result.get("authorName") or result.get("title") or result.get("expectedBookName") or job_label
+            append_job_log(job_id, f"{job_label}完成：{title}")
         except Exception as exc:
             update_job(job_id, status="failed", error=str(exc), result=None)
-            append_job_log(job_id, f"BPM 暂存失败：{exc}")
+            append_job_log(job_id, f"{job_label}失败：{exc}")
         finally:
             payload.get("bpm", {}).pop("password", None)
             JOB_QUEUE.task_done()
@@ -1449,8 +1486,11 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/import-bpm-sources":
             self.handle_import_bpm_sources()
             return
-        if path == "/api/bpm-jobs":
-            self.handle_bpm_job()
+        if path in {"/api/bpm-jobs", "/api/bpm-topic-jobs"}:
+            self.handle_bpm_job("topic")
+            return
+        if path == "/api/bpm-author-jobs":
+            self.handle_bpm_job("author")
             return
         if path == "/api/bpm-submit":
             self.handle_bpm_submit()
@@ -1478,11 +1518,11 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
 
-    def handle_bpm_job(self):
+    def handle_bpm_job(self, job_type: str):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            result = create_bpm_job(payload)
+            result = create_bpm_job(payload, job_type)
             body = json.dumps(result, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
