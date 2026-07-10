@@ -381,6 +381,7 @@
       display: flex;
       align-items: center;
       gap: 8px;
+      flex-wrap: wrap;
     }
 
     .file-strip {
@@ -856,6 +857,16 @@
       .editor-foot .top-actions button {
         padding: 0 8px;
       }
+
+      .topbar > .top-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: 100%;
+      }
+
+      .topbar > .top-actions .primary {
+        grid-column: 1 / -1;
+      }
     }
   </style>
 </head>
@@ -1021,7 +1032,8 @@
         </div>
         <div class="top-actions">
           <button id="refreshBpmJobs"><i data-lucide="refresh-cw" size="16"></i>刷新任务</button>
-          <button class="primary" id="queueBpm"><i data-lucide="send" size="16"></i>加入队列</button>
+          <button id="queueAuthor"><i data-lucide="user-round-plus" size="16"></i>新增作译者</button>
+          <button class="primary" id="queueBpm"><i data-lucide="send" size="16"></i>填报选题</button>
         </div>
       </div>
 
@@ -1070,14 +1082,15 @@
 	                <span>密码</span>
 	                <input id="bpmPassword" type="password" placeholder="仅本次使用，不保存">
               </label>
-              <div class="file-state" id="bpmStatus">加入队列后会创建 BPM 选题申报草稿，不会办理提交。</div>
+              <div class="file-state" id="bpmStatus">请选择新增作译者或填报选题；选题只暂存草稿，不办理提交。</div>
             </div>
           </section>
 
           <section class="panel">
             <h3 class="panel-title"><i data-lucide="shield-check" size="16"></i>队列规则</h3>
             <ul class="pending-list">
-              <li><i data-lucide="circle-alert" size="16"></i><span>六段正文必须全部确认后才能加入队列。</span></li>
+              <li><i data-lucide="circle-alert" size="16"></i><span>填报选题前，六段正文必须全部确认。</span></li>
+              <li><i data-lucide="circle-alert" size="16"></i><span>新增作译者只校验作者姓名和作者简介。</span></li>
               <li><i data-lucide="circle-alert" size="16"></i><span>密码只在本次任务内使用，不写入任务日志。</span></li>
               <li><i data-lucide="circle-alert" size="16"></i><span>队列只暂存草稿，不点击 BPM 办理提交。</span></li>
             </ul>
@@ -1362,7 +1375,7 @@
       authorMaintenance = author || null;
       if (!author) {
         authorTitle.textContent = "作译者信息待提取";
-        authorMeta.textContent = "上传申报表并生成后，将自动准备 BPM 新增作译者数据。";
+        authorMeta.textContent = "上传申报表并生成后，可单独新增至 BPM 作译者库。";
         authorBadge.textContent = "等待";
         return;
       }
@@ -1370,7 +1383,7 @@
       const unit = author.workUnit && author.workUnit.trim() ? author.workUnit : "单位待识别";
       const status = author.bioStatus || (author.bio && author.bio.trim() ? "已准备" : "待补全失败");
       authorTitle.textContent = `作译者：${name}`;
-      authorMeta.textContent = `工作单位：${unit}；BPM 填报时会先新增作译者，再填选题申报。`;
+      authorMeta.textContent = `工作单位：${unit}；可单独新增至 BPM 作译者库。`;
       authorBadge.textContent = status;
     }
 
@@ -1544,7 +1557,35 @@
       if (authorMaintenance || topic.authorMaintenance) {
         topic.authorMaintenance = { ...(topic.authorMaintenance || {}), ...(authorMaintenance || {}) };
       }
-      return { ...topic, ...scoreMapForBpm() };
+	      return { ...topic, ...scoreMapForBpm() };
+	    }
+
+    function currentBpmCredentials() {
+      return {
+        url: document.getElementById("bpmUrl").value || "http://bpm.phei.com.cn:8088/portal/r/w",
+        user: document.getElementById("bpmUser").value.trim(),
+        name: bpmEditorName(),
+        password: document.getElementById("bpmPassword").value
+      };
+    }
+
+    function currentBpmPayload() {
+      const bpm = currentBpmCredentials();
+      const title = document.getElementById("projectName").textContent || "选题策划报告";
+      bpmTopic = currentBpmTopic();
+      return {
+        title,
+        editorName: bpm.name,
+        sections,
+        scores: scoreItems,
+        total: scoreItems.reduce((sum, item) => sum + Number(item[2] || 0), 0),
+        bpmTopic,
+        bpm
+      };
+    }
+
+    function hasBpmCredentials(bpm) {
+      return Boolean(bpm.user && bpm.name && bpm.password);
     }
 
     function renderBpmPreview() {
@@ -1611,13 +1652,14 @@
         }
         bpmJobs.innerHTML = jobs.map((job) => {
           const logs = (job.logs || []).slice(-4).join("\n");
+          const jobType = job.type === "author" ? "作译者维护" : "选题填报";
           return `
             <article class="job-card">
               <div class="job-head">
                 <div class="job-title" title="${job.title || ""}">${job.title || "未命名选题"}</div>
                 <span class="status-pill small ${jobStatusClass(job.status)}">${jobStatusLabel(job.status)}</span>
               </div>
-              <div class="job-meta">发起人：${job.createdBy || "未知"} · 创建：${job.createdAt || ""}</div>
+              <div class="job-meta">${jobType} · 发起人：${job.createdBy || "未知"} · 创建：${job.createdAt || ""}</div>
               <div class="job-log">${logs || ""}</div>
             </article>
           `;
@@ -1952,51 +1994,82 @@
         showToast(`还有 ${unconfirmed.length} 段未确认`);
         return;
       }
-	      const bpm = {
-	        url: document.getElementById("bpmUrl").value || "http://bpm.phei.com.cn:8088/portal/r/w",
-	        user: document.getElementById("bpmUser").value.trim(),
-	        name: bpmEditorName(),
-	        password: document.getElementById("bpmPassword").value
-	      };
-	      if (!bpm.user || !bpm.name || !bpm.password) {
-	        showToast("请填写 BPM 账号、姓名和密码");
-	        return;
-	      }
-      const title = document.getElementById("projectName").textContent || "选题策划报告";
+      const payload = currentBpmPayload();
+      if (!hasBpmCredentials(payload.bpm)) {
+        showToast("请填写 BPM 账号、姓名和密码");
+        return;
+      }
+      const title = payload.title;
       if (!window.confirm(`确认把《${title}》加入 BPM 暂存队列？后台会按顺序登录 BPM 并创建草稿。`)) return;
 
       const button = document.getElementById("queueBpm");
       button.disabled = true;
-      setBpmProgress(40, "正在加入 BPM 队列...");
-      bpmTopic = currentBpmTopic();
-	      const payload = {
-	        title,
-	        editorName: bpm.name,
-	        sections,
-        scores: scoreItems,
-        total: scoreItems.reduce((sum, item) => sum + Number(item[2] || 0), 0),
-        bpmTopic,
-        bpm
-      };
+      setBpmProgress(40, "正在加入选题填报队列...");
       try {
-        const response = await fetch("/api/bpm-jobs", {
+        const response = await fetch("/api/bpm-topic-jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         });
         if (!response.ok) throw new Error(await response.text());
         const result = await response.json();
-        finishBpmProgress("已加入 BPM 队列");
-        bpmStatus.textContent = `已加入队列：${result.title || title}`;
-        document.getElementById("fileState").textContent = "已加入 BPM 队列";
+        finishBpmProgress("选题填报已加入队列");
+        bpmStatus.textContent = `选题填报已加入队列：${result.title || title}`;
+        document.getElementById("fileState").textContent = "选题填报已加入队列";
         document.getElementById("bpmPassword").value = "";
         await refreshBpmJobs();
-        showToast("已加入 BPM 队列");
+        showToast("选题填报已加入队列");
       } catch (error) {
         console.error(error);
-        failBpmProgress("加入队列失败");
-        bpmStatus.textContent = error.message.slice(0, 80) || "加入队列失败";
-        showToast("加入队列失败");
+        failBpmProgress("选题填报加入队列失败");
+        bpmStatus.textContent = error.message.slice(0, 80) || "选题填报加入队列失败";
+        showToast("选题填报加入队列失败");
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    document.getElementById("queueAuthor").addEventListener("click", async () => {
+      saveActiveText();
+      const payload = currentBpmPayload();
+      if (!hasBpmCredentials(payload.bpm)) {
+        showToast("请填写 BPM 账号、姓名和密码");
+        return;
+      }
+      const author = payload.bpmTopic.authorMaintenance || {};
+      const authorName = String(author.name || payload.bpmTopic.authorName || "").trim();
+      const authorBio = String(author.bio || "").trim();
+      if (!authorName) {
+        showToast("没有识别到作者姓名");
+        return;
+      }
+      if (!authorBio) {
+        showToast("作者简介为空，不能新增作译者");
+        return;
+      }
+      if (!window.confirm(`确认把“${authorName}”新增至 BPM 作译者库？如果该作者已经存在，请取消本次操作。`)) return;
+
+      const button = document.getElementById("queueAuthor");
+      button.disabled = true;
+      setBpmProgress(40, "正在加入作译者维护队列...");
+      try {
+        const response = await fetch("/api/bpm-author-jobs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error(await response.text());
+        const result = await response.json();
+        finishBpmProgress("作译者维护已加入队列");
+        bpmStatus.textContent = `作译者维护已加入队列：${result.title || authorName}`;
+        document.getElementById("bpmPassword").value = "";
+        await refreshBpmJobs();
+        showToast("作译者维护已加入队列");
+      } catch (error) {
+        console.error(error);
+        failBpmProgress("作译者维护加入队列失败");
+        bpmStatus.textContent = error.message.slice(0, 80) || "作译者维护加入队列失败";
+        showToast("作译者维护加入队列失败");
       } finally {
         button.disabled = false;
       }
