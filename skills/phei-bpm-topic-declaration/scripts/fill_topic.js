@@ -228,11 +228,31 @@ function isValidPersonName(value) {
 }
 
 async function setInputValue(frame, selector, value) {
-  await frame.locator(selector).evaluate((el, v) => {
-    el.value = v;
+  const locator = frame.locator(selector).first();
+  await locator.waitFor({ state: 'attached', timeout: 10000 });
+  const desired = String(value ?? '');
+  if (!(await locator.isEditable())) {
+    await setReadonlyInputValue(frame, selector, desired);
+    return;
+  }
+  const visible = await locator.isVisible().catch(() => false);
+  if (!visible) {
+    await setReadonlyInputValue(frame, selector, desired);
+    return;
+  }
+  await locator.click();
+  await locator.fill(desired);
+  await locator.press('Tab');
+}
+
+async function setReadonlyInputValue(frame, selector, value) {
+  const locator = frame.locator(selector).first();
+  if (!(await locator.count()) || value === undefined || value === null) return;
+  await locator.evaluate((el, nextValue) => {
+    el.value = nextValue;
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-  }, value);
+  }, String(value));
 }
 
 async function setInputValueIfExists(frame, selector, value) {
@@ -249,7 +269,7 @@ async function typeTextLikeUser(frame, selector, value) {
   await locator.waitFor({ state: 'visible', timeout: 10000 });
   await locator.click();
   await locator.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
-  await locator.type(String(value), { delay: 20 });
+  await locator.pressSequentially(String(value), { delay: 20 });
   await locator.press('Tab');
 }
 
@@ -268,14 +288,12 @@ async function getSelectOptions(locator) {
   })));
 }
 
-async function fireSelectChange(locator) {
-  await locator.evaluate((el) => {
+async function setHiddenSelectValue(locator, value) {
+  await locator.evaluate((el, nextValue) => {
+    el.value = nextValue;
     el.dispatchEvent(new Event('input', { bubbles: true }));
     el.dispatchEvent(new Event('change', { bubbles: true }));
-    if (typeof el.onchange === 'function') {
-      el.onchange();
-    }
-  });
+  }, value);
 }
 
 async function selectOptionWhenReady(frame, selector, value, options = {}) {
@@ -324,46 +342,128 @@ async function selectOptionWhenReady(frame, selector, value, options = {}) {
     return null;
   }
 
-  await locator.evaluate((el, choice) => {
-    const selected = Array.from(el.options || []).find((option) => option.value === choice.value)
-      || Array.from(el.options || []).find((option) => option.textContent.trim() === choice.text);
-    if (selected) {
-      selected.selected = true;
-      el.value = selected.value;
-    } else {
-      el.value = choice.value || choice.text;
-    }
-  }, match);
-  await fireSelectChange(locator);
+  if (await locator.isVisible()) {
+    await locator.selectOption({ value: match.value });
+    await locator.press('Tab');
+  } else {
+    await setHiddenSelectValue(locator, match.value);
+  }
   if (settleMs) await frame.waitForTimeout(settleMs);
   return match;
 }
 
+async function setHiddenChoiceValue(target) {
+  await target.evaluate((el) => {
+    el.checked = true;
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
 async function setRadioValue(frame, name, value) {
   if (value === undefined || value === null || value === '') return;
-  const result = await frame.evaluate(({ radioName, radioValue }) => {
-    const candidates = Array.from(document.querySelectorAll('input'))
-      .filter((el) => el.name === radioName);
-    const target = candidates.find((el) => el.value === radioValue);
-    if (!target) {
-      return {
-        ok: false,
-        available: candidates.map((el) => el.value),
-      };
-    }
-    target.checked = true;
-    target.dispatchEvent(new Event('input', { bubbles: true }));
-    target.dispatchEvent(new Event('change', { bubbles: true }));
-    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
-    if (typeof target.onclick === 'function') {
-      target.onclick();
-    }
-    return { ok: true, available: candidates.map((el) => el.value) };
-  }, { radioName: name, radioValue: value });
-
-  if (!result.ok) {
-    throw new Error(`Radio option not found for ${name}: "${value}". Available options: ${result.available.join(', ')}`);
+  const candidates = frame.locator(`input[name="${name}"]`);
+  const values = await candidates.evaluateAll((elements) => elements.map((el) => el.getAttribute('value') || ''));
+  const target = frame.locator(`input[name="${name}"][value=${JSON.stringify(String(value))}]`);
+  if (!(await target.count())) {
+    throw new Error(`Choice not found for ${name}: "${value}". Available options: ${values.join(', ')}`);
   }
+  if (await target.first().isChecked()) return;
+  const label = frame.locator('label', { has: target }).first();
+  if (!(await label.isVisible())) {
+    await setHiddenChoiceValue(target.first());
+    return;
+  }
+  await label.click();
+  if (!(await target.first().isChecked())) {
+    throw new Error(`Visible label did not select ${name}: "${value}"`);
+  }
+}
+
+async function selectPersonWithPicker(formFrame, fieldName, personName) {
+  if (!personName) return;
+  const field = formFrame.locator(`input[name="${fieldName}"]`).first();
+  if ((await field.inputValue()) === personName) return;
+
+  const row = field.locator('xpath=ancestor::tr[1]');
+  const pickerButton = row.locator('input[type="button"][title="弹出选择窗口"]').first();
+  const context = formFrame.page().context();
+  const pickerPromise = context.waitForEvent('page', { timeout: 15000 });
+  await pickerButton.click();
+  const picker = await pickerPromise;
+  await picker.waitForLoadState('domcontentloaded');
+
+  let personLink = null;
+  const deadline = Date.now() + 30000;
+  while (!personLink && Date.now() < deadline) {
+    for (const pickerFrame of picker.frames()) {
+      const candidate = pickerFrame.getByText(personName, { exact: true });
+      if (await candidate.count()) {
+        personLink = candidate.first();
+        break;
+      }
+    }
+    if (!personLink) await picker.waitForTimeout(500);
+  }
+  if (!personLink) {
+    await picker.close().catch(() => {});
+    throw new Error(`BPM person picker could not find "${personName}" for ${fieldName}`);
+  }
+
+  await personLink.click();
+  await formFrame.waitForFunction(
+    ({ name, expected }) => document.querySelector(`input[name="${name}"]`)?.value === expected,
+    { name: fieldName, expected: personName },
+    { timeout: 15000 },
+  );
+  await picker.close().catch(() => {});
+}
+
+async function expandDepartmentNode(departmentFrame, nodeText) {
+  const node = departmentFrame.getByText(nodeText, { exact: true });
+  await node.waitFor({ state: 'visible', timeout: 15000 });
+  const nodeRow = node.locator('xpath=ancestor::div[contains(@class,"x-tree-node-el")][1]');
+  const expandButton = nodeRow.locator('.x-tree-ec-icon[class*="-plus"]');
+  if (await expandButton.count()) {
+    await expandButton.click();
+    await departmentFrame.waitForTimeout(1000);
+  }
+}
+
+async function selectDepartmentWithPicker(formFrame, departmentPath) {
+  if (!departmentPath) return;
+  const departmentName = departmentPath.split('/').pop();
+  const field = formFrame.locator('input[name="PRJDEPT"]').first();
+  if ((await field.inputValue()).includes(departmentName)) return;
+
+  const row = field.locator('xpath=ancestor::tr[1]');
+  const pickerButton = row.locator('input[type="button"][title="弹出选择窗口"]').first();
+  await pickerButton.click();
+  const popup = formFrame.page();
+  let departmentFrame = null;
+  const deadline = Date.now() + 30000;
+  while (!departmentFrame && Date.now() < deadline) {
+    departmentFrame = popup.frames().find((frame) => frame.url().includes('Dictionary_Department_Tree'));
+    if (!departmentFrame) await popup.waitForTimeout(500);
+  }
+  if (!departmentFrame) {
+    throw new Error('BPM department picker frame did not load');
+  }
+
+  await expandDepartmentNode(departmentFrame, '电子工业出版社');
+  await expandDepartmentNode(departmentFrame, '社领导');
+  const pathParts = departmentPath.split('/');
+  for (const pathPart of pathParts.slice(0, -1)) {
+    await expandDepartmentNode(departmentFrame, pathPart);
+  }
+  const departmentNode = departmentFrame.getByText(departmentName, { exact: true });
+  await departmentNode.waitFor({ state: 'visible', timeout: 15000 });
+  await departmentNode.click();
+  await formFrame.waitForFunction(
+    ({ expected }) => document.querySelector('input[name="PRJDEPT"]')?.value.includes(expected),
+    { expected: departmentName },
+    { timeout: 15000 },
+  );
 }
 
 function scoreMap(topic) {
@@ -380,55 +480,77 @@ function scoreMap(topic) {
 async function fillScoreGrid(frame, topic) {
   const scores = scoreMap(topic);
   const total = Number(topic.scoreTotal || Object.values(scores).reduce((sum, value) => sum + Number(value || 0), 0));
-  await setInputValueIfExists(frame, '#SCORE', String(total));
 
-  await frame.evaluate(({ scores: scoreValues, totalScore }) => {
-    if (!window.Ext || !Ext.getCmp) return;
-    const grid = Ext.getCmp('ext-comp-1022')
-      || Object.values(Ext.ComponentMgr.all.map || {}).find((component) => component && component.title === '选题分级评分表');
-    if (!grid || !grid.getStore) return;
-    const store = grid.getStore();
-    store.each((record) => {
+  const grid = frame.locator('#ext-comp-1022');
+  await grid.locator('.ext-el-mask-msg').waitFor({ state: 'hidden', timeout: 30000 }).catch(() => {});
+  const rows = grid.locator('.x-grid3-body .x-grid3-row');
+  const deadline = Date.now() + 30000;
+  while ((await rows.count()) < 7 && Date.now() < deadline) {
+    await frame.waitForTimeout(500);
+  }
+  if ((await rows.count()) < 7) {
+    throw new Error(`Score grid did not finish loading; found ${await rows.count()} rows`);
+  }
+
+  await frame.evaluate(({ scoreValues, totalScore }) => {
+    const scoreGrid = window.Ext && Ext.getCmp ? Ext.getCmp('ext-comp-1022') : null;
+    if (!scoreGrid || !scoreGrid.getStore) throw new Error('Score grid store is unavailable');
+    scoreGrid.getStore().each((record) => {
       const item = String(record.get('ITEM') || '');
       if (item.includes('总分')) {
         record.set('SELFSCORE', totalScore);
         return;
       }
-      const match = Object.keys(scoreValues).find((name) => item.includes(name));
-      if (match) record.set('SELFSCORE', Number(scoreValues[match] || 0));
+      const scoreName = Object.keys(scoreValues).find((name) => item.includes(name));
+      if (scoreName) record.set('SELFSCORE', Number(scoreValues[scoreName] || 0));
     });
-    if (grid.getView) grid.getView().refresh();
-  }, { scores, totalScore: total });
+    if (scoreGrid.getView) scoreGrid.getView().refresh();
+  }, { scoreValues: scores, totalScore: total });
+
+  await grid.getByRole('button', { name: '保存', exact: true }).click();
+  await grid.locator('.ext-el-mask-msg').waitFor({ state: 'hidden', timeout: 5000 }).catch(() => {});
+  await setReadonlyInputValue(frame, '#SCORE', String(total));
+  await frame.waitForTimeout(1000);
 }
 
 async function clickSaveAndWait(frame, { timeout = 30000, settleMs = 1000 } = {}) {
-  await frame.evaluate(() => {
-    if (typeof saveForm === 'function') {
-      saveForm();
-      return;
-    }
-    const button = document.querySelector('button.x-btn-text.save')
-      || Array.from(document.querySelectorAll('button,input')).find((el) => /保存|暂存/.test(el.value || el.textContent || ''));
-    if (!button) throw new Error('Save button not found in current frame');
-    button.click();
-  });
+  const button = frame.locator(
+    'button.x-btn-text.save:visible, input[name="SAVEB"]:visible, input[value="保存"]:visible, input[value="暂存"]:visible',
+  ).first();
+  await button.waitFor({ state: 'visible', timeout: 10000 });
+  await button.click();
   await frame.waitForLoadState('domcontentloaded', { timeout }).catch(() => {});
   await frame.waitForTimeout(settleMs);
 }
 
-async function clickWorkflowSaveAndWait(popup, { timeout = 30000, settleMs = 1000 } = {}) {
-  await popup.evaluate(() => {
-    if (typeof saveFormData !== 'function') {
-      throw new Error('saveFormData is not available');
-    }
-    saveFormData();
-  });
-  await popup.waitForTimeout(timeout);
+async function clickWorkflowSaveAndWait(popup, formFrame, { timeout = 30000, settleMs = 1000 } = {}) {
+  const saveButton = popup.locator('input[name="SAVEB"][value="暂存"]').first();
+  await saveButton.waitFor({ state: 'visible', timeout: 10000 });
+  await saveButton.click();
+  const submitMask = formFrame.getByText(/正在提交数据/).first();
+  const maskAppeared = await submitMask.waitFor({ state: 'visible', timeout: 5000 })
+    .then(() => true)
+    .catch(() => false);
+  if (maskAppeared) {
+    await submitMask.waitFor({ state: 'hidden', timeout: 60000 });
+  }
+  await formFrame.locator('#BOOKNAME').waitFor({ state: 'attached', timeout }).catch(() => {});
   await popup.waitForTimeout(settleMs);
 }
 
-async function waitForCostFrame(popup) {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
+async function waitForMainFormFrame(popup, timeout = 15000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    for (const frame of popup.frames()) {
+      if (await frame.locator('#BOOKNAME').count().catch(() => 0)) return frame;
+    }
+    await popup.waitForTimeout(300);
+  }
+  throw new Error('Main BPM form frame did not reload after temporary save');
+}
+
+async function waitForCostFrame(popup, maxAttempts = 40) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     await popup.waitForTimeout(500);
     for (const frame of popup.frames()) {
       if (await frame.locator('input[name="UNITNUM"]').count().catch(() => 0)) {
@@ -450,24 +572,24 @@ async function triggerCostEstimateForm(formFrame) {
 }
 
 async function clearMainAuthorFields(formFrame) {
-  await setInputValueIfExists(formFrame, 'input[name="AUTHORCODE"]', '');
-  await setInputValueIfExists(formFrame, 'input[name="AUTHORID"]', '');
-  await setInputValueIfExists(formFrame, 'input[name="AUTHORNAME"]', '');
+  await setReadonlyInputValue(formFrame, 'input[name="AUTHORCODE"]', '');
+  await setReadonlyInputValue(formFrame, 'input[name="AUTHORID"]', '');
+  await setReadonlyInputValue(formFrame, 'input[name="AUTHORNAME"]', '');
 }
 
 async function openCostEstimateForm(popup, formFrame, topic = {}) {
-  await triggerCostEstimateForm(formFrame);
-  let costFrame = await waitForCostFrame(popup);
-  if (costFrame) return costFrame;
-
   if (topic.authorName) {
-    await setInputValueIfExists(formFrame, 'input[name="AUTHORNAME"]', topic.authorName);
-    await formFrame.waitForTimeout(300);
-    await triggerCostEstimateForm(formFrame);
-    costFrame = await waitForCostFrame(popup);
-    await clearMainAuthorFields(formFrame);
-    if (costFrame) return costFrame;
+    await setReadonlyInputValue(formFrame, 'input[name="AUTHORNAME"]', topic.authorName);
   }
+  const costTab = formFrame.locator('a', { hasText: '成本估算' }).first();
+  if (await costTab.count()) {
+    await costTab.click({ force: true });
+    await formFrame.waitForTimeout(500);
+  }
+  await triggerCostEstimateForm(formFrame);
+  const costFrame = await waitForCostFrame(popup, 40);
+  await clearMainAuthorFields(formFrame);
+  if (costFrame) return costFrame;
 
   const frameUrls = popup.frames().map((frame) => frame.url()).join(' | ');
   throw new Error(`Cost estimate form did not load. Frames: ${frameUrls}`);
@@ -578,12 +700,11 @@ async function openAuthorMaintenancePopup(page) {
   if (!listFrame) throw new Error('Author maintenance frame not found');
 
   const popupPromise = page.waitForEvent('popup', { timeout: 8000 });
-  await listFrame.evaluate(() => {
-    if (typeof insertRowData2 !== 'function') {
-      throw new Error('insertRowData2 is not available');
-    }
-    insertRowData2(frmMain, 'WorkFlow_Execute_Worklist_BindReport_S_Open', 2628);
-  });
+  const addAuthorButton = listFrame.locator(
+    'input[value="新增作译者"], button:has-text("新增作译者")',
+  ).first();
+  await addAuthorButton.waitFor({ state: 'visible', timeout: 10000 });
+  await addAuthorButton.click();
   const popup = await popupPromise;
   await popup.waitForLoadState('domcontentloaded');
   await popup.waitForTimeout(3000);
@@ -673,8 +794,45 @@ async function openTopicPopup(page) {
   return { popup, formFrame };
 }
 
+async function reopenSavedTopicPopup(page, cno, bookName) {
+  await page.locator('li.top-navitem-panel').filter({ hasText: '编辑' }).first().click();
+  await page.waitForTimeout(500);
+  await page.locator('div.nav-item-func.metro-nav-goto').filter({ hasText: '选题申报' }).first().click();
+  const deadline = Date.now() + 20000;
+  let listFrame = null;
+  while (!listFrame && Date.now() < deadline) {
+    listFrame = page.frames().find((frame) => frame.url().includes('WorkFlow_Execute_Worklist'));
+    if (!listFrame) await page.waitForTimeout(500);
+  }
+  if (!listFrame) throw new Error('Worklist frame not found while reopening saved draft');
+  const savedLink = listFrame.locator('a').filter({ hasText: cno || bookName }).first();
+  await savedLink.waitFor({ state: 'visible', timeout: 15000 });
+  const popupPromise = page.waitForEvent('popup', { timeout: 15000 });
+  await savedLink.click();
+  const popup = await popupPromise;
+  await popup.waitForLoadState('domcontentloaded');
+
+  let formFrame = null;
+  const formDeadline = Date.now() + 30000;
+  while (!formFrame && Date.now() < formDeadline) {
+    const urlMatch = popup.frames().find((frame) => frame.url().includes('BindReport_Open'));
+    if (urlMatch && await urlMatch.locator('#BOOKNAME').count().catch(() => 0)) formFrame = urlMatch;
+    if (!formFrame) {
+      for (const frame of popup.frames()) {
+        if (await frame.locator('#BOOKNAME').count().catch(() => 0)) {
+          formFrame = frame;
+          break;
+        }
+      }
+    }
+    if (!formFrame) await popup.waitForTimeout(500);
+  }
+  if (!formFrame) throw new Error('Saved BPM form frame did not load');
+  return { popup, formFrame };
+}
+
 async function fillForm(formFrame, topic) {
-  await formFrame.locator('#BOOKNAME').fill(topic.bookName);
+  await setInputValue(formFrame, '#BOOKNAME', topic.bookName);
 
   await selectOptionWhenReady(formFrame, '#TYPE', topic.type, { fallback: true });
   await selectOptionWhenReady(formFrame, '#CLASS1', topic.class1, { fallback: true, settleMs: 1200 });
@@ -684,19 +842,19 @@ async function fillForm(formFrame, topic) {
   await selectOptionWhenReady(formFrame, '#GBCLASS', topic.gbClass, { fallback: true });
   await selectOptionWhenReady(formFrame, '#READLEVER', topic.readLevel, { fallback: true });
   await selectOptionWhenReady(formFrame, '#HAVEREPLACEBSN', topic.haveReplaceBsn, { fallback: true });
-  await formFrame.locator('input[name="REPLACEBSN"]').fill(topic.replaceBsn);
+  await setInputValue(formFrame, 'input[name="REPLACEBSN"]', topic.replaceBsn);
 
   // The main declaration form's author fields should be selected from BPM's
   // author library manually. Leave them blank to avoid saving a name without
   // the corresponding author code.
   await clearMainAuthorFields(formFrame);
 
-  await formFrame.locator('#BRIEF').fill(topic.brief);
-  await formFrame.locator('#READER').fill(topic.reader);
-  await formFrame.locator('#FEATURE').fill(topic.feature);
-  await formFrame.locator('#COMPARE').fill(topic.compare);
+  await setInputValue(formFrame, '#BRIEF', topic.brief);
+  await setInputValue(formFrame, '#READER', topic.reader);
+  await setInputValue(formFrame, '#FEATURE', topic.feature);
+  await setInputValue(formFrame, '#COMPARE', topic.compare);
 
-  await formFrame.locator('input[name="READERNUM"]').fill(topic.readerNum);
+  await setInputValue(formFrame, 'input[name="READERNUM"]', topic.readerNum);
   await selectOptionWhenReady(formFrame, '#LANGUAGE', topic.language, { fallback: true });
   await selectOptionWhenReady(formFrame, '#SCRIPTSOURCE', topic.scriptSource, { fallback: true });
   await selectOptionWhenReady(formFrame, '#SCRIPTSTYLE', topic.scriptStyle, { fallback: true });
@@ -706,39 +864,38 @@ async function fillForm(formFrame, topic) {
   await selectOptionWhenReady(formFrame, '#AWARDS', topic.awards, { fallback: true });
   await selectOptionWhenReady(formFrame, '#COLORPRINT', topic.colorPrint, { fallback: true });
   await selectOptionWhenReady(formFrame, '#HAVECD', topic.haveCd, { required: false, fallback: true });
-  await formFrame.locator('input[name="WORDS"]').fill(topic.words);
-  await formFrame.locator('input[name="PRICE"]').fill(topic.price);
-  await formFrame.locator('input[name="REMCHARNUM"]').fill(topic.remCharNum);
+  await setInputValue(formFrame, 'input[name="WORDS"]', topic.words);
+  await setInputValue(formFrame, 'input[name="PRICE"]', topic.price);
+  await setInputValue(formFrame, 'input[name="REMCHARNUM"]', topic.remCharNum);
   await selectOptionWhenReady(formFrame, '#REMPAYMODE', topic.remPayMode, { fallback: true });
-  await formFrame.locator('input[name="REMSTANDARD"]').fill(topic.remStandard);
+  await setInputValue(formFrame, 'input[name="REMSTANDARD"]', topic.remStandard);
   await selectOptionIfExists(formFrame, '#REMUNIT', topic.remUnit);
   await selectOptionWhenReady(formFrame, '#PUBLISHMODE', topic.publishMode, { fallback: true });
   await selectOptionWhenReady(formFrame, 'select[name="HAVEZZ"]', topic.haveZz, { fallback: true });
-  await formFrame.locator('input[name="IMBURSEFEE"]').fill(topic.imburseFee);
-  await formFrame.locator('input[name="IMBURSENUM"]').fill(topic.imburseNum);
+  await setInputValue(formFrame, 'input[name="IMBURSEFEE"]', topic.imburseFee);
+  await setInputValue(formFrame, 'input[name="IMBURSENUM"]', topic.imburseNum);
   await selectOptionWhenReady(formFrame, 'select[name="HAVEBX"]', topic.haveBx, { fallback: true });
-  await formFrame.locator('input[name="BSALENUM"]').fill(topic.bsaleNum);
-  await formFrame.locator('input[name="BSALEDISCOUNT"]').fill(topic.bsaleDiscount);
+  await setInputValue(formFrame, 'input[name="BSALENUM"]', topic.bsaleNum);
+  await setInputValue(formFrame, 'input[name="BSALEDISCOUNT"]', topic.bsaleDiscount);
   await selectOptionIfExists(formFrame, '#COMODE', topic.coMode);
   await setInputValueIfExists(formFrame, 'input[name="COBUYDISCOUNT"]', topic.coBuyDiscount);
   await selectOptionIfExists(formFrame, '#BSALEMODE', topic.bsaleMode);
   await selectOptionIfExists(formFrame, '#DIGITAL', topic.digital);
   await selectOptionIfExists(formFrame, '#EREMPAYMODE', topic.eRemPayMode);
   await setInputValueIfExists(formFrame, 'input[name="EREMSTANDARD"]', topic.eRemStandard);
-  await formFrame.locator('input[name="TOTALNUM"]').fill(topic.totalNum);
-  await formFrame.locator('input[name="FIRSTNUM"]').fill(topic.firstNum);
+  await setInputValue(formFrame, 'input[name="TOTALNUM"]', topic.totalNum);
+  await setInputValue(formFrame, 'input[name="FIRSTNUM"]', topic.firstNum);
   await setRadioValue(formFrame, 'PROJECT', topic.project);
   await setRadioValue(formFrame, 'SCRIPTCLASSIFY', topic.scriptClassify);
 
-  await setInputValue(formFrame, 'input[name="PRJEDITOR"]', topic.projectEditor);
-  await setInputValue(formFrame, 'input[name="PRJEDITORNO"]', topic.projectEditorNo);
-  await setInputValue(formFrame, 'input[name="PRJEDITORUID"]', topic.projectEditorUid);
-  await setInputValue(formFrame, 'input[name="EDITOR"]', topic.editor);
-  await setInputValue(formFrame, 'input[name="EDITORNO"]', topic.editorNo);
-  await setInputValue(formFrame, 'input[name="EDITORUID"]', topic.editorUid);
-  await setInputValue(formFrame, 'input[name="PRJDEPT"]', topic.projectDept);
-  await setInputValue(formFrame, 'input[name="EDITORDEPT"]', topic.editorDept);
-  await fillScoreGrid(formFrame, topic);
+  await setReadonlyInputValue(formFrame, 'input[name="PRJEDITOR"]', topic.projectEditor);
+  await setReadonlyInputValue(formFrame, 'input[name="PRJEDITORNO"]', topic.projectEditorNo);
+  await setReadonlyInputValue(formFrame, 'input[name="PRJEDITORUID"]', topic.projectEditorUid);
+  await setReadonlyInputValue(formFrame, 'input[name="EDITOR"]', topic.editor);
+  await setReadonlyInputValue(formFrame, 'input[name="EDITORNO"]', topic.editorNo);
+  await setReadonlyInputValue(formFrame, 'input[name="EDITORUID"]', topic.editorUid);
+  await setReadonlyInputValue(formFrame, 'input[name="PRJDEPT"]', topic.projectDept);
+  await setReadonlyInputValue(formFrame, 'input[name="EDITORDEPT"]', topic.editorDept);
   await selectOptionWhenReady(formFrame, '#ISCOST', topic.isCost, { fallback: true });
   await selectOptionWhenReady(formFrame, '#IMPSCRIPT', topic.impScript, { fallback: true });
   await selectOptionWhenReady(formFrame, '#ISURGENT', topic.isUrgent, { fallback: true });
@@ -746,7 +903,6 @@ async function fillForm(formFrame, topic) {
   await selectOptionIfExists(formFrame, '#BWCLASS', topic.bwClass);
   await setInputValueIfExists(formFrame, 'input[name="BWCIPCLASS"]', topic.bwCipClass);
 
-  await typeTextLikeUser(formFrame, 'input[name="BOOKNAME"]', topic.bookName);
 }
 
 async function inspectForm(formFrame) {
@@ -780,11 +936,66 @@ async function inspectForm(formFrame) {
         name: el.getAttribute('name') || '',
         label: labelTextFor(el),
         value: el.value || '',
+        onchange: el.getAttribute('onchange') || '',
         options: el.tagName.toLowerCase() === 'select'
           ? Array.from(el.options).map((option) => ({ value: option.value, text: option.textContent.trim() }))
           : [],
       }));
   });
+}
+
+async function inspectClickableControls(frame) {
+  return await frame.evaluate(() => Array.from(document.querySelectorAll(
+    'button, input[type="button"], input[type="submit"], input[type="image"], a, [onclick]',
+  )).map((el) => ({
+    tag: el.tagName.toLowerCase(),
+    id: el.id || '',
+    name: el.getAttribute('name') || '',
+    type: el.getAttribute('type') || '',
+    value: el.getAttribute('value') || '',
+    text: (el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120),
+    onclick: (el.getAttribute('onclick') || '').slice(0, 300),
+    visible: Boolean(el.getBoundingClientRect().width && el.getBoundingClientRect().height),
+  })).filter((item) => (
+    item.visible
+    || /暂存|保存|成本|估算|办理|新增/.test(`${item.value} ${item.text} ${item.onclick}`)
+  )));
+}
+
+async function inspectScoreGrid(formFrame) {
+  return await formFrame.evaluate(() => {
+    const marker = Array.from(document.querySelectorAll('*')).find((el) => (
+      el.children.length === 0 && (el.textContent || '').trim() === '选题分级评分表'
+    ));
+    const container = marker && (marker.closest('.x-panel') || marker.parentElement?.parentElement?.parentElement);
+    return {
+      marker: marker ? {
+        tag: marker.tagName.toLowerCase(),
+        id: marker.id || '',
+        className: marker.className || '',
+      } : null,
+      html: container ? container.outerHTML.slice(0, 30000) : '',
+    };
+  });
+}
+
+async function inspectChoiceControls(formFrame) {
+  return await formFrame.locator('input[name="PROJECT"], input[name="SCRIPTCLASSIFY"]').evaluateAll(
+    (elements) => elements.map((el) => ({
+      name: el.getAttribute('name') || '',
+      value: el.getAttribute('value') || '',
+      html: (el.closest('label') || el.parentElement || el).outerHTML.slice(0, 2000),
+    })),
+  );
+}
+
+async function inspectEditorControls(formFrame) {
+  return await formFrame.locator(
+    'input[name="PRJEDITOR"], input[name="EDITOR"], input[name="PRJDEPT"]',
+  ).evaluateAll((elements) => elements.map((el) => ({
+    name: el.getAttribute('name') || '',
+    html: (el.closest('tr') || el.parentElement || el).outerHTML.slice(0, 10000),
+  })));
 }
 
 async function collectFilledFormDiagnostics(formFrame) {
@@ -886,11 +1097,93 @@ async function inspect(outputDirArg) {
       mode: 'inspect',
       fieldCount: fields.length,
       fields,
+      popupControls: await inspectClickableControls(popup.mainFrame()),
+      formControls: await inspectClickableControls(formFrame),
+      scoreGridRows: await inspectScoreGrid(formFrame),
+      choiceControls: await inspectChoiceControls(formFrame),
+      editorControls: await inspectEditorControls(formFrame),
       screenshot,
       popupUrl: popup.url(),
       frameUrl: formFrame.url(),
     };
     console.log(JSON.stringify(result, null, 2));
+  } finally {
+    await browser.close();
+  }
+}
+
+async function inspectEditorPicker(outputDirArg) {
+  const outputDir = path.resolve(outputDirArg || process.cwd());
+  fs.mkdirSync(outputDir, { recursive: true });
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1400 } });
+
+  try {
+    await login(page);
+    const { popup, formFrame } = await openTopicPopup(page);
+    const editorRow = formFrame.locator('input[name="PRJEDITOR"]').locator('xpath=ancestor::tr[1]');
+    await editorRow.locator('input[type="button"]').click();
+    await popup.waitForTimeout(3000);
+    const pages = popup.context().pages();
+    const pageDiagnostics = [];
+    for (let index = 0; index < pages.length; index += 1) {
+      const currentPage = pages[index];
+      const screenshot = path.join(outputDir, `bpm-editor-picker-page-${index}.png`);
+      await currentPage.screenshot({ path: screenshot, fullPage: true }).catch(() => {});
+      pageDiagnostics.push({
+        url: currentPage.url(),
+        screenshot,
+        frames: await Promise.all(currentPage.frames().map(async (frame) => ({
+          url: frame.url(),
+          text: (await frame.locator('body').innerText().catch(() => '')).slice(0, 3000),
+          controls: await inspectClickableControls(frame).catch(() => []),
+        }))),
+      });
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      mode: 'inspect-picker',
+      pages: pageDiagnostics,
+    }, null, 2));
+  } finally {
+    await browser.close();
+  }
+}
+
+async function inspectDepartmentPicker(outputDirArg) {
+  const outputDir = path.resolve(outputDirArg || process.cwd());
+  fs.mkdirSync(outputDir, { recursive: true });
+  const browser = await chromium.launch({ headless: true });
+  const page = await browser.newPage({ viewport: { width: 1600, height: 1400 } });
+
+  try {
+    await login(page);
+    const { popup, formFrame } = await openTopicPopup(page);
+    const departmentRow = formFrame.locator('input[name="PRJDEPT"]').locator('xpath=ancestor::tr[1]');
+    await departmentRow.locator('input[type="button"]').click();
+    await popup.waitForTimeout(3000);
+    const departmentFrame = popup.frames().find((frame) => frame.url().includes('Dictionary_Department_Tree'));
+    if (departmentFrame) {
+      await departmentFrame.locator('.x-tree-elbow-end-plus').first().click();
+      await popup.waitForTimeout(3000);
+      if (await departmentFrame.locator('.x-tree-elbow-end-plus').count()) {
+        await departmentFrame.locator('.x-tree-elbow-end-plus').first().click();
+        await popup.waitForTimeout(3000);
+      }
+    }
+    const screenshot = path.join(outputDir, 'bpm-department-picker.png');
+    await popup.screenshot({ path: screenshot, fullPage: true });
+    console.log(JSON.stringify({
+      ok: true,
+      mode: 'inspect-department-picker',
+      screenshot,
+      frames: await Promise.all(popup.frames().map(async (frame) => ({
+        url: frame.url(),
+        text: (await frame.locator('body').innerText().catch(() => '')).slice(0, 5000),
+        html: (await frame.locator('body').innerHTML().catch(() => '')).slice(0, 30000),
+        controls: await inspectClickableControls(frame).catch(() => []),
+      }))),
+    }, null, 2));
   } finally {
     await browser.close();
   }
@@ -917,21 +1210,26 @@ async function submit(jsonPath) {
     const authorResult = await saveAuthorMaintenance(page, topic, outputDir);
     const { popup, formFrame } = await openTopicPopup(page);
     await fillForm(formFrame, topic);
-    const cno = await readInputValue(formFrame, '#CNO');
 
     const mainBefore = path.join(outputDir, 'bpm-main-before-save.png');
     const mainAfter = path.join(outputDir, 'bpm-main-after-save.png');
     await popup.screenshot({ path: mainBefore, fullPage: true });
-    await clickWorkflowSaveAndWait(popup, { timeout: 8000, settleMs: 3000 });
+    await clickWorkflowSaveAndWait(popup, formFrame, { timeout: 30000, settleMs: 3000 });
     await popup.screenshot({ path: mainAfter, fullPage: true });
+    const savedFormFrame = await waitForMainFormFrame(popup);
+    const cno = await readInputValue(savedFormFrame, '#CNO');
 
-    const costFrame = await openCostEstimateForm(popup, formFrame, topic);
+    await popup.close();
+    const reopened = await reopenSavedTopicPopup(page, cno, topic.bookName);
+    await fillScoreGrid(reopened.formFrame, topic);
+    const costFrame = await openCostEstimateForm(reopened.popup, reopened.formFrame, topic);
     await fillCostEstimateForm(costFrame, topic);
     const costBefore = path.join(outputDir, 'bpm-before-save.png');
     const costAfter = path.join(outputDir, 'bpm-after-save.png');
-    await popup.screenshot({ path: costBefore, fullPage: true });
+    await reopened.popup.screenshot({ path: costBefore, fullPage: true });
     await clickSaveAndWait(costFrame, { timeout: 30000, settleMs: 2000 });
-    await popup.screenshot({ path: costAfter, fullPage: true });
+    await reopened.popup.screenshot({ path: costAfter, fullPage: true });
+    await reopened.popup.close().catch(() => {});
 
     const verification = await verifyCreatedTitle(page, topic.bookName, cno);
     const result = {
@@ -1005,8 +1303,9 @@ async function debugMain(jsonPath) {
     const before = await collectFilledFormDiagnostics(formFrame);
     const beforeScreenshot = path.join(outputDir, 'bpm-main-debug-before-save.png');
     await popup.screenshot({ path: beforeScreenshot, fullPage: true });
-    await clickWorkflowSaveAndWait(popup, { timeout: 8000, settleMs: 3000 });
-    const after = await collectFilledFormDiagnostics(formFrame);
+    await clickWorkflowSaveAndWait(popup, formFrame, { timeout: 30000, settleMs: 3000 });
+    const savedFormFrame = await waitForMainFormFrame(popup);
+    const after = await collectFilledFormDiagnostics(savedFormFrame);
     const afterScreenshot = path.join(outputDir, 'bpm-main-debug-after-save.png');
     await popup.screenshot({ path: afterScreenshot, fullPage: true });
     console.log(JSON.stringify({
@@ -1029,6 +1328,14 @@ async function main() {
     await inspect(jsonPath);
     return;
   }
+  if (mode === 'inspect-picker') {
+    await inspectEditorPicker(jsonPath);
+    return;
+  }
+  if (mode === 'inspect-department-picker') {
+    await inspectDepartmentPicker(jsonPath);
+    return;
+  }
   if (mode === 'dry-run' && jsonPath) {
     await dryRun(jsonPath);
     return;
@@ -1038,7 +1345,7 @@ async function main() {
     return;
   }
   if (mode !== 'submit' || !jsonPath) {
-    throw new Error('Usage: node fill_topic.js inspect [/abs/output/dir] OR node fill_topic.js dry-run /abs/path/topic.json OR node fill_topic.js debug-main /abs/path/topic.json OR node fill_topic.js submit /abs/path/topic.json');
+    throw new Error('Usage: node fill_topic.js inspect [/abs/output/dir] OR node fill_topic.js inspect-picker [/abs/output/dir] OR node fill_topic.js inspect-department-picker [/abs/output/dir] OR node fill_topic.js dry-run /abs/path/topic.json OR node fill_topic.js debug-main /abs/path/topic.json OR node fill_topic.js submit /abs/path/topic.json');
   }
   await submit(jsonPath);
 }

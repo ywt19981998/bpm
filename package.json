@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "start": "python3 -u server.py",
-    "test": "python3 -m py_compile server.py && node --check skills/phei-bpm-topic-declaration/scripts/fill_topic.js"
+    "test": "python3 -m py_compile server.py && node --check skills/phei-bpm-topic-declaration/scripts/fill_topic.js && node --test tests/*.test.js"
   },
   "keywords": [],
   "author": "",
