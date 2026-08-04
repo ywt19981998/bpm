@@ -65,9 +65,23 @@ test('BPM choices click visible labels and directly set hidden required choices'
   assert.match(source, /label\.click\(\)/);
 });
 
-test('readonly editor metadata uses the fast targeted setter', () => {
-  assert.match(source, /setReadonlyInputValue\(formFrame,\s*'input\[name="PRJEDITOR"\]'/);
-  assert.match(source, /setReadonlyInputValue\(formFrame,\s*'input\[name="EDITOR"\]'/);
+test('editor identity preserves BPM values or uses the person picker before save', () => {
+  const identityBody = functionBody('ensureEditorIdentity');
+  const pickerBody = functionBody('selectBpmPerson');
+  const fillBody = functionBody('fillForm');
+  const saveBody = functionBody('submitTopic');
+  let lastReadIndex = -1;
+  for (const field of ['PRJEDITOR', 'PRJEDITORNO', 'EDITOR', 'EDITORNO']) {
+    assert.match(identityBody, new RegExp(`readInputValue\\(formFrame, ['"]input\\[name=["']${field}["']\\]['"]\\)`));
+    lastReadIndex = Math.max(lastReadIndex, identityBody.indexOf(`input[name="${field}"]`));
+  }
+  assert.match(identityBody, /selectBpmPerson\(formFrame,\s*'input\[name="PRJEDITOR"\]',\s*topic\.projectEditor,\s*'策划编辑'\)/);
+  assert.match(identityBody, /selectBpmPerson\(formFrame,\s*'input\[name="EDITOR"\]',\s*topic\.editor,\s*'拟责任编辑'\)/);
+  assert.ok(lastReadIndex < identityBody.indexOf('selectBpmPerson('));
+  assert.doesNotMatch(pickerBody, /field\.inputValue\(\).*personName/);
+  assert.match(fillBody, /ensureEditorIdentity\(formFrame,\s*topic\)/);
+  assert.ok(saveBody.indexOf('fillForm(formFrame, topic)') < saveBody.indexOf('clickWorkflowSaveAndWait'));
+  assert.doesNotMatch(fillBody, /setReadonlyInputValue\(formFrame,\s*'input\[name="(?:PRJEDITORNO|PRJEDITORUID|EDITORNO|EDITORUID)"\]'/);
   assert.match(source, /setReadonlyInputValue\(formFrame,\s*'input\[name="PRJDEPT"\]'/);
 });
 

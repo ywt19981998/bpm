@@ -1,6 +1,8 @@
 import http.client
+import base64
 import io
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -127,6 +129,117 @@ class ServerAuthHttpTests(unittest.TestCase):
             status, _, body = self.request("GET", "/api/bpm-jobs", cookie=self.cookie)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"jobs": []})
+
+
+class ServerCredentialHttpTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_store = server.APP_STORE
+        key = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+        server.APP_STORE = AppStore(Path(self.temp_dir.name) / "app.db", credential_key=key)
+        self.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+        self.cookie = self.register("editor01", "张编辑")
+        self.other_cookie = self.register("editor02", "李编辑")
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.thread.join()
+        self.httpd.server_close()
+        server.APP_STORE = self.original_store
+        self.temp_dir.cleanup()
+
+    def request(self, method, path, payload=None, cookie=None):
+        body = None if payload is None else json.dumps(payload).encode("utf-8")
+        headers = {}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        if cookie:
+            headers["Cookie"] = cookie
+        connection = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port)
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        result = response.status, dict(response.getheaders()), response.read().decode("utf-8")
+        connection.close()
+        return result
+
+    def register(self, username, display_name):
+        status, headers, _ = self.request(
+            "POST",
+            "/api/auth/register",
+            {"username": username, "password": "S3cure-pass", "displayName": display_name},
+        )
+        self.assertEqual(status, 201)
+        return headers["Set-Cookie"].split(";", 1)[0]
+
+    def test_credentials_require_a_session_for_every_method(self):
+        for method in ("GET", "PUT", "DELETE"):
+            with self.subTest(method=method):
+                status, _, body = self.request(method, "/api/integrations/phei-bpm", {})
+                self.assertEqual(status, 401)
+                self.assertEqual(json.loads(body)["code"], "AUTH_REQUIRED")
+
+    def test_rejects_empty_account_or_password(self):
+        for payload in (
+            {"account": "", "password": "bpm-secret"},
+            {"account": "editor-bpm", "password": ""},
+            {"account": "   ", "password": "bpm-secret"},
+        ):
+            with self.subTest(payload=payload):
+                status, _, body = self.request(
+                    "PUT", "/api/integrations/phei-bpm", payload, cookie=self.cookie
+                )
+                self.assertEqual(status, 400)
+                self.assertNotIn("bpm-secret", body)
+
+    def test_saves_masks_updates_and_clears_credentials_without_echoing_passwords(self):
+        status, _, body = self.request(
+            "PUT",
+            "/api/integrations/phei-bpm",
+            {"account": "editor-bpm", "password": "bpm-secret"},
+            cookie=self.cookie,
+        )
+        self.assertEqual(status, 200)
+        self.assertNotIn("bpm-secret", body)
+
+        status, _, body = self.request("GET", "/api/integrations/phei-bpm", cookie=self.cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"configured": True, "accountMasked": "e********m"})
+        self.assertNotIn("bpm-secret", body)
+
+        status, _, body = self.request(
+            "PUT",
+            "/api/integrations/phei-bpm",
+            {"account": "updated-account", "password": "updated-secret"},
+            cookie=self.cookie,
+        )
+        self.assertEqual(status, 200)
+        self.assertNotIn("updated-secret", body)
+        status, _, body = self.request("GET", "/api/integrations/phei-bpm", cookie=self.cookie)
+        self.assertEqual(json.loads(body), {"configured": True, "accountMasked": "u*************t"})
+
+        status, _, body = self.request("DELETE", "/api/integrations/phei-bpm", cookie=self.cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"configured": False, "accountMasked": None})
+        self.assertNotIn("updated-secret", body)
+
+    def test_credentials_are_isolated_by_authenticated_user(self):
+        status, _, body = self.request(
+            "PUT",
+            "/api/integrations/phei-bpm",
+            {"account": "editor-bpm", "password": "bpm-secret"},
+            cookie=self.cookie,
+        )
+        self.assertEqual(status, 200)
+        self.assertNotIn("bpm-secret", body)
+
+        status, _, body = self.request(
+            "GET", "/api/integrations/phei-bpm", cookie=self.other_cookie
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"configured": False, "accountMasked": None})
+        self.assertNotIn("bpm-secret", body)
 
 
 class MultipartFormTests(unittest.TestCase):

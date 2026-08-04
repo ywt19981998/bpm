@@ -380,10 +380,9 @@ async function setRadioValue(frame, name, value) {
   }
 }
 
-async function selectPersonWithPicker(formFrame, fieldName, personName) {
+async function selectBpmPerson(formFrame, selector, personName, fieldLabel) {
   if (!personName) return;
-  const field = formFrame.locator(`input[name="${fieldName}"]`).first();
-  if ((await field.inputValue()) === personName) return;
+  const field = formFrame.locator(selector).first();
 
   const row = field.locator('xpath=ancestor::tr[1]');
   const pickerButton = row.locator('input[type="button"][title="弹出选择窗口"]').first();
@@ -407,16 +406,31 @@ async function selectPersonWithPicker(formFrame, fieldName, personName) {
   }
   if (!personLink) {
     await picker.close().catch(() => {});
-    throw new Error(`BPM person picker could not find "${personName}" for ${fieldName}`);
+    throw new Error(`BPM person picker could not find "${personName}" for ${fieldLabel}`);
   }
 
   await personLink.click();
   await formFrame.waitForFunction(
-    ({ name, expected }) => document.querySelector(`input[name="${name}"]`)?.value === expected,
-    { name: fieldName, expected: personName },
+    ({ fieldSelector, expected }) => document.querySelector(fieldSelector)?.value === expected,
+    { fieldSelector: selector, expected: personName },
     { timeout: 15000 },
   );
   await picker.close().catch(() => {});
+}
+
+async function ensureEditorIdentity(formFrame, topic) {
+  const projectEditor = await readInputValue(formFrame, 'input[name="PRJEDITOR"]');
+  const projectEditorNo = await readInputValue(formFrame, 'input[name="PRJEDITORNO"]');
+  const editor = await readInputValue(formFrame, 'input[name="EDITOR"]');
+  const editorNo = await readInputValue(formFrame, 'input[name="EDITORNO"]');
+  if (
+    projectEditor === topic.projectEditor
+    && projectEditorNo
+    && editor === topic.editor
+    && editorNo
+  ) return;
+  await selectBpmPerson(formFrame, 'input[name="PRJEDITOR"]', topic.projectEditor, '策划编辑');
+  await selectBpmPerson(formFrame, 'input[name="EDITOR"]', topic.editor, '拟责任编辑');
 }
 
 async function expandDepartmentNode(departmentFrame, nodeText) {
@@ -924,12 +938,7 @@ async function fillForm(formFrame, topic) {
   await setRadioValue(formFrame, 'PROJECT', topic.project);
   await setRadioValue(formFrame, 'SCRIPTCLASSIFY', topic.scriptClassify);
 
-  await setReadonlyInputValue(formFrame, 'input[name="PRJEDITOR"]', topic.projectEditor);
-  await setReadonlyInputValue(formFrame, 'input[name="PRJEDITORNO"]', topic.projectEditorNo);
-  await setReadonlyInputValue(formFrame, 'input[name="PRJEDITORUID"]', topic.projectEditorUid);
-  await setReadonlyInputValue(formFrame, 'input[name="EDITOR"]', topic.editor);
-  await setReadonlyInputValue(formFrame, 'input[name="EDITORNO"]', topic.editorNo);
-  await setReadonlyInputValue(formFrame, 'input[name="EDITORUID"]', topic.editorUid);
+  await ensureEditorIdentity(formFrame, topic);
   await setReadonlyInputValue(formFrame, 'input[name="PRJDEPT"]', topic.projectDept);
   await setReadonlyInputValue(formFrame, 'input[name="EDITORDEPT"]', topic.editorDept);
   await selectOptionWhenReady(formFrame, '#ISCOST', topic.isCost, { fallback: true });

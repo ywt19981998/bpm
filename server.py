@@ -1041,23 +1041,29 @@ def public_jobs() -> list[dict]:
         return [dict(job) for job in jobs]
 
 
-def create_bpm_job(payload: dict, job_type: str = "topic") -> dict:
+def create_bpm_job(payload: dict, user: dict, job_type: str = "topic") -> dict:
     if job_type not in {"topic", "author"}:
         raise ValueError(f"不支持的 BPM 任务类型：{job_type}")
-    credentials = payload.get("bpm") or {}
-    bpm_user = (credentials.get("user") or "").strip()
-    bpm_password = credentials.get("password") or ""
-    if not bpm_user or not bpm_password:
-        raise ValueError("请填写 BPM 账号和密码。")
-    topic = merge_bpm_topic(payload)
+    credentials = APP_STORE.get_integration_credentials(user["id"], "phei_bpm")
+    if not credentials:
+        raise ValueError("请先保存 BPM 账号和密码。")
+    trusted_payload = deepcopy(payload)
+    trusted_payload["editorName"] = user["display_name"]
+    trusted_payload["bpm"] = {
+        "url": os.environ.get("BPM_URL", "http://bpm.phei.com.cn:8088/portal/r/w"),
+        "user": credentials["account"],
+        "name": user["display_name"],
+        "password": credentials["password"],
+    }
+    topic = merge_bpm_topic(trusted_payload)
     if job_type == "topic":
-        sections = payload.get("sections") or []
+        sections = trusted_payload.get("sections") or []
         if len(sections) < 6 or any(not section.get("text") for section in sections):
             raise ValueError("请先生成完整的一到六部分报告内容。")
         unconfirmed = [section for section in sections if not section.get("confirmed")]
         if unconfirmed:
             raise ValueError(f"还有 {len(unconfirmed)} 段未确认，不能加入 BPM 队列。")
-        job_title = topic.get("bookName") or payload.get("title") or "选题策划报告"
+        job_title = topic.get("bookName") or trusted_payload.get("title") or "选题策划报告"
         job_label = "选题填报"
     else:
         author = topic.get("authorMaintenance") if isinstance(topic.get("authorMaintenance"), dict) else {}
@@ -1077,7 +1083,7 @@ def create_bpm_job(payload: dict, job_type: str = "topic") -> dict:
         "status": "queued",
         "createdAt": created,
         "updatedAt": created,
-        "createdBy": bpm_user,
+        "createdBy": credentials["account"],
         "topicPreview": bpm_topic_preview(topic),
         "logs": [f"{created} 已加入{job_label}队列"],
         "result": None,
@@ -1089,7 +1095,7 @@ def create_bpm_job(payload: dict, job_type: str = "topic") -> dict:
         for old_id in old_ids:
             if JOBS[old_id]["status"] not in {"running", "queued"}:
                 JOBS.pop(old_id, None)
-    JOB_QUEUE.put((job_id, job_type, payload))
+    JOB_QUEUE.put((job_id, job_type, trusted_payload))
     return dict(job)
 
 
@@ -1603,6 +1609,35 @@ class Handler(SimpleHTTPRequestHandler):
             pass
         self.send_json(200, {"ok": True}, self.session_cookie("", 0))
 
+    def handle_bpm_integration_get(self, user: dict):
+        try:
+            self.send_json(200, APP_STORE.get_integration_status(user["id"], "phei_bpm"))
+        except ValueError as error:
+            self.send_json(400, {"error": str(error), "code": "INTEGRATION_CONFIGURATION_ERROR"})
+
+    def handle_bpm_integration_put(self, user: dict):
+        try:
+            payload = self.read_json()
+            account = payload.get("account")
+            password = payload.get("password")
+            if not isinstance(account, str) or not account.strip():
+                raise ValueError("BPM 账号不能为空。")
+            if not isinstance(password, str) or not password.strip():
+                raise ValueError("BPM 密码不能为空。")
+            APP_STORE.put_integration_credentials(
+                user["id"], "phei_bpm", account.strip(), password
+            )
+            self.send_json(200, APP_STORE.get_integration_status(user["id"], "phei_bpm"))
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(400, {"error": str(error), "code": "INTEGRATION_INVALID_INPUT"})
+
+    def handle_bpm_integration_delete(self, user: dict):
+        try:
+            APP_STORE.delete_integration_credentials(user["id"], "phei_bpm")
+            self.send_json(200, {"configured": False, "accountMasked": None})
+        except ValueError as error:
+            self.send_json(400, {"error": str(error), "code": "INTEGRATION_CONFIGURATION_ERROR"})
+
     def do_GET(self):
         path = unquote(self.path.split("?", 1)[0])
         if path == "/api/health":
@@ -1613,12 +1648,38 @@ class Handler(SimpleHTTPRequestHandler):
             if user:
                 self.send_json(200, {"user": self.public_user(user)})
             return
-        if path.startswith("/api/") and not self.require_user():
+        user = None
+        if path.startswith("/api/"):
+            user = self.require_user()
+            if not user:
+                return
+        if path == "/api/integrations/phei-bpm":
+            self.handle_bpm_integration_get(user)
             return
         if path == "/api/bpm-jobs":
             self.send_json(200, {"jobs": public_jobs()})
             return
         super().do_GET()
+
+    def do_PUT(self):
+        path = unquote(self.path.split("?", 1)[0])
+        user = self.require_user() if path.startswith("/api/") else None
+        if path.startswith("/api/") and not user:
+            return
+        if path == "/api/integrations/phei-bpm":
+            self.handle_bpm_integration_put(user)
+            return
+        self.send_error(404)
+
+    def do_DELETE(self):
+        path = unquote(self.path.split("?", 1)[0])
+        user = self.require_user() if path.startswith("/api/") else None
+        if path.startswith("/api/") and not user:
+            return
+        if path == "/api/integrations/phei-bpm":
+            self.handle_bpm_integration_delete(user)
+            return
+        self.send_error(404)
 
     def do_POST(self):
         path = unquote(self.path.split("?", 1)[0])
@@ -1673,9 +1734,12 @@ class Handler(SimpleHTTPRequestHandler):
 
     def handle_bpm_job(self, job_type: str):
         try:
+            user = self.require_user()
+            if not user:
+                return
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            result = create_bpm_job(payload, job_type)
+            result = create_bpm_job(payload, user, job_type)
             body = json.dumps(result, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
