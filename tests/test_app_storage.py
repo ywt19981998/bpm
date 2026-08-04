@@ -87,7 +87,21 @@ class AppStoreCredentialTests(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def database_text(self):
-        return self.db_path.read_bytes().decode("utf-8", "ignore")
+        database_files = [self.db_path]
+        wal_path = Path(f"{self.db_path}-wal")
+        if wal_path.exists():
+            database_files.append(wal_path)
+        return b"".join(path.read_bytes() for path in database_files).decode(
+            "utf-8", "ignore"
+        )
+
+    def stored_credential_bytes(self):
+        with sqlite3.connect(self.db_path) as connection:
+            return connection.execute(
+                "SELECT nonce, ciphertext FROM integration_credentials "
+                "WHERE user_id = ? AND system_type = ?",
+                (self.user_id, "phei_bpm"),
+            ).fetchone()
 
     def test_credentials_are_encrypted_and_isolated(self):
         self.store.put_integration_credentials(self.user_id, "phei_bpm", "yewt", "bpm-secret")
@@ -124,6 +138,34 @@ class AppStoreCredentialTests(unittest.TestCase):
         missing_store = AppStore(self.db_path)
         with self.assertRaises(CredentialConfigurationError):
             missing_store.get_integration_credentials(self.user_id, "phei_bpm")
+
+    def test_updating_credentials_changes_nonce_and_ciphertext(self):
+        self.store.put_integration_credentials(self.user_id, "phei_bpm", "yewt", "bpm-secret")
+        first_nonce, first_ciphertext = self.stored_credential_bytes()
+
+        self.store.put_integration_credentials(
+            self.user_id, "phei_bpm", "updated-account", "updated-secret"
+        )
+        second_nonce, second_ciphertext = self.stored_credential_bytes()
+
+        self.assertNotEqual(first_nonce, second_nonce)
+        self.assertNotEqual(first_ciphertext, second_ciphertext)
+        self.assertEqual(
+            self.store.get_integration_credentials(self.user_id, "phei_bpm"),
+            {"account": "updated-account", "password": "updated-secret"},
+        )
+
+    def test_changing_user_id_breaks_authenticated_decryption(self):
+        self.store.put_integration_credentials(self.user_id, "phei_bpm", "yewt", "bpm-secret")
+        with sqlite3.connect(self.db_path) as connection:
+            connection.execute(
+                "UPDATE integration_credentials SET user_id = ? "
+                "WHERE user_id = ? AND system_type = ?",
+                (self.other_user_id, self.user_id, "phei_bpm"),
+            )
+
+        with self.assertRaises(CredentialConfigurationError):
+            self.store.get_integration_credentials(self.other_user_id, "phei_bpm")
 
 
 if __name__ == "__main__":
