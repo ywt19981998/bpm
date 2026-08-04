@@ -4,7 +4,11 @@ __pycache__/
 .DS_Store
 .env
 .env.*
+!.env.example
 *.log
+data/
+*.db-wal
+*.db-shm
 server.pid
 output/
 .playwright-cli/
