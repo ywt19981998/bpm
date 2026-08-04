@@ -8,6 +8,7 @@ import re
 import secrets
 import sqlite3
 import time
+import uuid
 from pathlib import Path
 
 from cryptography.exceptions import InvalidTag
@@ -19,6 +20,26 @@ SCRYPT_N = 16384
 SCRYPT_R = 8
 SCRYPT_P = 1
 SCRYPT_DKLEN = 32
+JOB_STATUSES = {"queued", "running", "succeeded", "failed"}
+JOB_RESERVED_PAYLOAD_KEYS = {
+    "id",
+    "type",
+    "title",
+    "status",
+    "createdAt",
+    "updatedAt",
+    "logs",
+    "result",
+    "error",
+}
+SENSITIVE_JOB_PAYLOAD_KEYS = {
+    "password",
+    "token",
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+}
 
 
 class CredentialConfigurationError(ValueError):
@@ -96,6 +117,32 @@ class AppStore:
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (2, int(time.time())),
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS jobs (
+                    id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    job_type TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'succeeded', 'failed')),
+                    public_payload_json TEXT NOT NULL,
+                    logs_json TEXT NOT NULL,
+                    result_json TEXT,
+                    error_summary TEXT,
+                    created_at INTEGER NOT NULL,
+                    started_at INTEGER,
+                    finished_at INTEGER,
+                    updated_at INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_user_created ON jobs(user_id, created_at DESC)"
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (3, int(time.time())),
             )
 
     @staticmethod
@@ -325,3 +372,175 @@ class AppStore:
                 "DELETE FROM integration_credentials WHERE user_id = ? AND system_type = ?",
                 (user_id, system_type),
             )
+
+    @staticmethod
+    def _job_timestamp() -> int:
+        return time.time_ns() // 1_000_000
+
+    @staticmethod
+    def _format_job_timestamp(value: int | None) -> str | None:
+        if value is None:
+            return None
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(value / 1000))
+
+    @classmethod
+    def _validate_public_job_payload(cls, public_payload: dict) -> dict:
+        if not isinstance(public_payload, dict):
+            raise ValueError("public job payload must be an object")
+        forbidden = JOB_RESERVED_PAYLOAD_KEYS & public_payload.keys()
+        if forbidden:
+            raise ValueError("public job payload cannot override job fields")
+
+        cls._validate_public_job_value(public_payload)
+        try:
+            json.dumps(public_payload, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as error:
+            raise ValueError("public job payload must be JSON serializable") from error
+        return public_payload
+
+    @classmethod
+    def _validate_public_job_value(cls, value) -> None:
+        def check(nested_value):
+            if isinstance(nested_value, dict):
+                for key, child_value in nested_value.items():
+                    if str(key).lower() in SENSITIVE_JOB_PAYLOAD_KEYS:
+                        raise ValueError("public job data cannot contain credentials")
+                    check(child_value)
+            elif isinstance(nested_value, list):
+                for child_value in nested_value:
+                    check(child_value)
+
+        check(value)
+
+    @classmethod
+    def _job_from_row(cls, row: sqlite3.Row) -> dict:
+        payload = json.loads(row["public_payload_json"])
+        job = {
+            "id": row["id"],
+            "type": row["job_type"],
+            "title": row["title"],
+            "status": row["status"],
+            "createdAt": cls._format_job_timestamp(row["created_at"]),
+            "updatedAt": cls._format_job_timestamp(row["updated_at"]),
+            "logs": json.loads(row["logs_json"]),
+            "result": None if row["result_json"] is None else json.loads(row["result_json"]),
+            "error": row["error_summary"],
+        }
+        job.update(payload)
+        return job
+
+    def create_job(self, user_id: int, job_type: str, title: str, public_payload: dict) -> dict:
+        if not isinstance(job_type, str) or not job_type.strip():
+            raise ValueError("job_type is required")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("title is required")
+        payload = self._validate_public_job_payload(public_payload)
+        now = self._job_timestamp()
+        job_id = uuid.uuid4().hex[:12]
+        with self.connect() as connection:
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO jobs(
+                        id, user_id, job_type, title, status, public_payload_json,
+                        logs_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'queued', ?, '[]', ?, ?)
+                    """,
+                    (
+                        job_id,
+                        user_id,
+                        job_type.strip(),
+                        title.strip(),
+                        json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("user does not exist") from error
+            row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        return self._job_from_row(row)
+
+    def update_job(
+        self,
+        job_id: str,
+        user_id: int,
+        status: str,
+        result=None,
+        error_summary: str | None = None,
+    ) -> None:
+        if status not in JOB_STATUSES:
+            raise ValueError("invalid job status")
+        if error_summary is not None and not isinstance(error_summary, str):
+            raise ValueError("error_summary must be a string")
+        try:
+            self._validate_public_job_value(result)
+            result_json = None if result is None else json.dumps(
+                result, ensure_ascii=False, separators=(",", ":")
+            )
+        except (TypeError, ValueError) as error:
+            raise ValueError("result must be JSON serializable") from error
+        now = self._job_timestamp()
+        started_at = now if status == "running" else None
+        finished_at = now if status in {"succeeded", "failed"} else None
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status = ?, result_json = ?, error_summary = ?, updated_at = ?,
+                    started_at = CASE WHEN ? IS NULL THEN started_at ELSE COALESCE(started_at, ?) END,
+                    finished_at = CASE WHEN ? IS NULL THEN finished_at ELSE ? END
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    status,
+                    result_json,
+                    error_summary,
+                    now,
+                    started_at,
+                    started_at,
+                    finished_at,
+                    finished_at,
+                    job_id,
+                    user_id,
+                ),
+            )
+
+    def append_job_log(self, job_id: str, user_id: int, message: str) -> None:
+        if not isinstance(message, str) or not message.strip():
+            raise ValueError("job log message is required")
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT logs_json FROM jobs WHERE id = ? AND user_id = ?", (job_id, user_id)
+            ).fetchone()
+            if row is None:
+                return
+            logs = json.loads(row["logs_json"])
+            logs.append(message.strip())
+            connection.execute(
+                """
+                UPDATE jobs SET logs_json = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (
+                    json.dumps(logs, ensure_ascii=False, separators=(",", ":")),
+                    self._job_timestamp(),
+                    job_id,
+                    user_id,
+                ),
+            )
+
+    def list_jobs(self, user_id: int, limit: int = 50) -> list[dict]:
+        if not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM jobs
+                WHERE user_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+        return [self._job_from_row(row) for row in rows]

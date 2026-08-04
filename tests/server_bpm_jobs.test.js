@@ -32,7 +32,8 @@ test('backend invokes isolated Playwright modes', () => {
 
 test('worker dispatches jobs by explicit type', () => {
   assert.match(source, /job_type\s*==\s*"author"/);
-  assert.match(source, /"type":\s*job_type/);
+  assert.match(source, /APP_STORE\.create_job\(\s*user_id,\s*job_type,/s);
+  assert.match(source, /APP_STORE\.update_job\(job_id,\s*user_id,\s*"succeeded"/);
 });
 
 test('BPM jobs use authenticated server-side credentials', () => {
@@ -42,7 +43,7 @@ test('BPM jobs use authenticated server-side credentials', () => {
   assert.match(trustedPayloadBody, /trusted_payload\s*=\s*deepcopy\(payload\)/);
   assert.doesNotMatch(createJobBody, /credentials\s*=\s*payload\.get\("bpm"\)/);
   assert.match(createJobBody, /trusted_bpm_payload\(payload,\s*user\)/);
-  assert.match(createJobBody, /JOB_QUEUE\.put\(\(job_id,\s*job_type,\s*trusted_payload\)\)/);
+  assert.match(createJobBody, /JOB_QUEUE\.put\(\(job_id,\s*user_id,\s*job_type,\s*trusted_payload\)\)/);
 });
 
 test('server does not synthesize BPM person identifiers from display names', () => {

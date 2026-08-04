@@ -91,10 +91,7 @@ DEFAULT_MODEL_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.co
 DEFAULT_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
 DEFAULT_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash").strip()
 
-JOB_LOCK = threading.Lock()
 JOB_QUEUE: queue.Queue = queue.Queue()
-JOBS: dict[str, dict] = {}
-MAX_JOBS = 50
 
 
 def runtime_log(message: str):
@@ -999,28 +996,18 @@ def bpm_topic_preview(topic: dict) -> dict:
     return {key: topic.get(key, "") for key in keys}
 
 
-def append_job_log(job_id: str, message: str):
-    with JOB_LOCK:
-        job = JOBS.get(job_id)
-        if not job:
-            return
-        job["updatedAt"] = now_iso()
-        job.setdefault("logs", []).append(f"{job['updatedAt']} {message}")
-
-
-def update_job(job_id: str, **updates):
-    with JOB_LOCK:
-        job = JOBS.get(job_id)
-        if not job:
-            return
-        job.update(updates)
-        job["updatedAt"] = now_iso()
-
-
-def public_jobs() -> list[dict]:
-    with JOB_LOCK:
-        jobs = sorted(JOBS.values(), key=lambda item: item["createdAt"], reverse=True)
-        return [dict(job) for job in jobs]
+def redact_bpm_secret(value, password: str):
+    if isinstance(value, dict):
+        return {
+            key: redact_bpm_secret(nested_value, password)
+            for key, nested_value in value.items()
+            if key.lower() not in {"password", "token", "authorization", "cookie"}
+        }
+    if isinstance(value, list):
+        return [redact_bpm_secret(nested_value, password) for nested_value in value]
+    if isinstance(value, str) and password:
+        return value.replace(password, "[已隐藏]")
+    return value
 
 
 def trusted_bpm_payload(payload: dict, user: dict) -> tuple[dict, dict]:
@@ -1041,7 +1028,7 @@ def trusted_bpm_payload(payload: dict, user: dict) -> tuple[dict, dict]:
 def create_bpm_job(payload: dict, user: dict, job_type: str = "topic") -> dict:
     if job_type not in {"topic", "author"}:
         raise ValueError(f"不支持的 BPM 任务类型：{job_type}")
-    trusted_payload, credentials = trusted_bpm_payload(payload, user)
+    trusted_payload, _ = trusted_bpm_payload(payload, user)
     topic = merge_bpm_topic(trusted_payload)
     if job_type == "topic":
         sections = trusted_payload.get("sections") or []
@@ -1061,45 +1048,38 @@ def create_bpm_job(payload: dict, user: dict, job_type: str = "topic") -> dict:
             raise ValueError("作者简介为空，不能新增作译者。")
         job_title = author_name
         job_label = "作译者维护"
-    job_id = uuid.uuid4().hex[:12]
-    created = now_iso()
-    job = {
-        "id": job_id,
-        "type": job_type,
-        "title": job_title,
-        "status": "queued",
-        "createdAt": created,
-        "updatedAt": created,
-        "createdBy": credentials["account"],
-        "topicPreview": bpm_topic_preview(topic),
-        "logs": [f"{created} 已加入{job_label}队列"],
-        "result": None,
-        "error": None,
-    }
-    with JOB_LOCK:
-        JOBS[job_id] = job
-        old_ids = sorted(JOBS, key=lambda key: JOBS[key]["createdAt"], reverse=True)[MAX_JOBS:]
-        for old_id in old_ids:
-            if JOBS[old_id]["status"] not in {"running", "queued"}:
-                JOBS.pop(old_id, None)
-    JOB_QUEUE.put((job_id, job_type, trusted_payload))
-    return dict(job)
+    user_id = user["id"]
+    job = APP_STORE.create_job(
+        user_id,
+        job_type,
+        job_title,
+        {
+            "createdBy": user["display_name"],
+            "topicPreview": bpm_topic_preview(topic),
+        },
+    )
+    job_id = job["id"]
+    APP_STORE.append_job_log(job_id, user_id, f"已加入{job_label}队列")
+    JOB_QUEUE.put((job_id, user_id, job_type, trusted_payload))
+    return APP_STORE.list_jobs(user_id, limit=1)[0]
 
 
 def bpm_job_worker():
     while True:
-        job_id, job_type, payload = JOB_QUEUE.get()
+        job_id, user_id, job_type, payload = JOB_QUEUE.get()
         job_label = "作译者维护" if job_type == "author" else "选题填报"
-        update_job(job_id, status="running", error=None)
-        append_job_log(job_id, f"开始登录 BPM 并执行{job_label}")
+        APP_STORE.update_job(job_id, user_id, "running")
+        APP_STORE.append_job_log(job_id, user_id, f"开始登录 BPM 并执行{job_label}")
         try:
             result = run_bpm_author_submit(payload) if job_type == "author" else run_bpm_topic_submit(payload)
-            update_job(job_id, status="completed", result=result, error=None)
+            public_result = redact_bpm_secret(result, payload.get("bpm", {}).get("password", ""))
+            APP_STORE.update_job(job_id, user_id, "succeeded", result=public_result)
             title = result.get("authorName") or result.get("title") or result.get("expectedBookName") or job_label
-            append_job_log(job_id, f"{job_label}完成：{title}")
+            APP_STORE.append_job_log(job_id, user_id, f"{job_label}完成：{title}")
         except Exception as exc:
-            update_job(job_id, status="failed", error=str(exc), result=None)
-            append_job_log(job_id, f"{job_label}失败：{exc}")
+            error_summary = redact_bpm_secret(str(exc), payload.get("bpm", {}).get("password", ""))
+            APP_STORE.update_job(job_id, user_id, "failed", error_summary=error_summary)
+            APP_STORE.append_job_log(job_id, user_id, f"{job_label}失败：{error_summary}")
         finally:
             payload.get("bpm", {}).pop("password", None)
             JOB_QUEUE.task_done()
@@ -1644,7 +1624,7 @@ class Handler(SimpleHTTPRequestHandler):
             self.handle_bpm_integration_get(user)
             return
         if path == "/api/bpm-jobs":
-            self.send_json(200, {"jobs": public_jobs()})
+            self.send_json(200, {"jobs": APP_STORE.list_jobs(user["id"])})
             return
         super().do_GET()
 

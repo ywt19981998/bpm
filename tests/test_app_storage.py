@@ -168,5 +168,84 @@ class AppStoreCredentialTests(unittest.TestCase):
             self.store.get_integration_credentials(self.other_user_id, "phei_bpm")
 
 
+class AppStoreJobTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "app.db"
+        self.key = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+        self.store = AppStore(self.db_path, credential_key=self.key)
+        self.user_id = self.store.register_user("editor01", "S3cure-pass", "张编辑")["id"]
+        self.other_user_id = self.store.register_user(
+            "editor02", "S3cure-pass", "李编辑"
+        )["id"]
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def database_text(self):
+        database_files = [self.db_path]
+        wal_path = Path(f"{self.db_path}-wal")
+        if wal_path.exists():
+            database_files.append(wal_path)
+        return b"".join(path.read_bytes() for path in database_files).decode(
+            "utf-8", "ignore"
+        )
+
+    def test_jobs_persist_status_logs_and_results_without_bpm_passwords(self):
+        self.store.put_integration_credentials(
+            self.user_id, "phei_bpm", "job-account", "test-bpm-password"
+        )
+        job = self.store.create_job(
+            self.user_id,
+            "topic",
+            "测试选题",
+            {"createdBy": "张编辑", "topicPreview": {"bookName": "测试选题"}},
+        )
+        self.store.update_job(job["id"], self.user_id, "running")
+        self.store.append_job_log(job["id"], self.user_id, "开始填报")
+        self.store.update_job(
+            job["id"], self.user_id, "succeeded", result={"cno": "XT20260001"}
+        )
+        failed = self.store.create_job(
+            self.user_id, "author", "测试作者", {"createdBy": "张编辑"}
+        )
+        self.store.update_job(failed["id"], self.user_id, "running")
+        self.store.update_job(
+            failed["id"], self.user_id, "failed", error_summary="BPM 登录失败"
+        )
+        self.store.create_job(
+            self.other_user_id, "topic", "另一用户选题", {"createdBy": "李编辑"}
+        )
+        with self.assertRaisesRegex(ValueError, "credentials"):
+            self.store.create_job(
+                self.user_id,
+                "topic",
+                "不能持久化可信载荷",
+                {"bpm": {"password": "test-bpm-password"}},
+            )
+
+        reopened = AppStore(self.db_path, self.key)
+        jobs = reopened.list_jobs(self.user_id)
+        self.assertEqual({item["status"] for item in jobs}, {"succeeded", "failed"})
+        persisted = next(item for item in jobs if item["id"] == job["id"])
+        self.assertEqual(persisted["status"], "succeeded")
+        self.assertEqual(persisted["createdBy"], "张编辑")
+        self.assertEqual(persisted["topicPreview"], {"bookName": "测试选题"})
+        self.assertEqual(persisted["logs"], ["开始填报"])
+        self.assertEqual(persisted["result"], {"cno": "XT20260001"})
+        self.assertIsNone(persisted["error"])
+        self.assertTrue(persisted["createdAt"])
+        self.assertTrue(persisted["updatedAt"])
+        self.assertEqual(reopened.list_jobs(self.other_user_id)[0]["title"], "另一用户选题")
+        self.assertNotIn("test-bpm-password", self.database_text())
+
+    def test_job_writes_are_limited_to_the_owning_user(self):
+        job = self.store.create_job(self.user_id, "topic", "测试选题", {})
+        self.store.update_job(job["id"], self.other_user_id, "running")
+        self.store.append_job_log(job["id"], self.other_user_id, "越权日志")
+        self.assertEqual(self.store.list_jobs(self.user_id)[0]["status"], "queued")
+        self.assertEqual(self.store.list_jobs(self.user_id)[0]["logs"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

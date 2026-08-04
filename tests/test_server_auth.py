@@ -125,7 +125,7 @@ class ServerAuthHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body, "test-docx")
 
-        with patch("server.public_jobs", return_value=[]):
+        with patch.object(server.APP_STORE, "list_jobs", return_value=[]):
             status, _, body = self.request("GET", "/api/bpm-jobs", cookie=self.cookie)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"jobs": []})
@@ -283,6 +283,65 @@ class ServerCredentialHttpTests(unittest.TestCase):
         self.assertNotIn("client-account", json.dumps(trusted_payload, ensure_ascii=False))
         self.assertNotIn("stored-secret", body)
         self.assertNotIn("client-secret", body)
+
+
+class ServerJobHttpTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_store = server.APP_STORE
+        self.key = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
+        self.db_path = Path(self.temp_dir.name) / "app.db"
+        server.APP_STORE = AppStore(self.db_path, credential_key=self.key)
+        self.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+        self.cookie = self.register("editor01", "张编辑")
+        self.other_cookie = self.register("editor02", "李编辑")
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.thread.join()
+        self.httpd.server_close()
+        server.APP_STORE = self.original_store
+        self.temp_dir.cleanup()
+
+    def request(self, method, path, payload=None, cookie=None):
+        body = None if payload is None else json.dumps(payload).encode("utf-8")
+        headers = {}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        if cookie:
+            headers["Cookie"] = cookie
+        connection = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port)
+        connection.request(method, path, body=body, headers=headers)
+        response = connection.getresponse()
+        result = response.status, dict(response.getheaders()), response.read().decode("utf-8")
+        connection.close()
+        return result
+
+    def register(self, username, display_name):
+        status, headers, _ = self.request(
+            "POST",
+            "/api/auth/register",
+            {"username": username, "password": "S3cure-pass", "displayName": display_name},
+        )
+        self.assertEqual(status, 201)
+        return headers["Set-Cookie"].split(";", 1)[0]
+
+    def test_jobs_are_isolated_and_survive_replacing_the_app_store(self):
+        first_user = server.APP_STORE.get_user_for_session(self.cookie.split("=", 1)[1])
+        job = server.APP_STORE.create_job(
+            first_user["id"], "topic", "仅张编辑可见", {"createdBy": "张编辑"}
+        )
+
+        status, _, body = self.request("GET", "/api/bpm-jobs", cookie=self.other_cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"jobs": []})
+
+        server.APP_STORE = AppStore(self.db_path, credential_key=self.key)
+        status, _, body = self.request("GET", "/api/bpm-jobs", cookie=self.cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["jobs"][0]["id"], job["id"])
 
 
 class MultipartFormTests(unittest.TestCase):
