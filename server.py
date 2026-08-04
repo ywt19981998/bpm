@@ -5,8 +5,14 @@ import re
 import tempfile
 import urllib.error
 import urllib.request
-import cgi
+try:
+    import cgi
+except ModuleNotFoundError:
+    cgi = None
+from email.parser import BytesParser
+from email.policy import default as email_default_policy
 from html import unescape
+import io
 import os
 import queue
 import subprocess
@@ -18,11 +24,16 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
+from http.cookies import CookieError, SimpleCookie
 
 from docx import Document
+from dotenv import load_dotenv
+
+from app_storage import AppStore
 
 
 ROOT = Path(__file__).resolve().parent
+load_dotenv(ROOT / ".env")
 TEMPLATE = ROOT / "templates" / "planning-report-template.docx"
 EXTRACTOR = ROOT / "skills" / "phei-topic-planning-report" / "scripts" / "extract_application_docx.py"
 REPORT_RULES = ROOT / "skills" / "phei-topic-planning-report" / "references" / "report_sections.md"
@@ -30,6 +41,51 @@ SCORING_RULES = ROOT / "skills" / "phei-topic-planning-report" / "references" / 
 BPM_SCRIPT = ROOT / "skills" / "phei-bpm-topic-declaration" / "scripts" / "fill_topic.js"
 NODE_MODULES = ROOT / "node_modules"
 RUNTIME_LOG = ROOT / "server-runtime.log"
+
+APP_STORE = AppStore(
+    Path(os.environ.get("PHEI_DB_PATH", ROOT / "data" / "app.db")),
+    os.environ.get("APP_CREDENTIAL_KEY", ""),
+)
+SESSION_COOKIE_NAME = "phei_session"
+
+
+class MultipartForm:
+    def __init__(self, fp, headers, environ):
+        content_type = headers.get("Content-Type", "")
+        content_length = int(environ.get("CONTENT_LENGTH", "0"))
+        raw_message = (
+            f"Content-Type: {content_type}\r\nMIME-Version: 1.0\r\n\r\n".encode("utf-8")
+            + fp.read(content_length)
+        )
+        message = BytesParser(policy=email_default_policy).parsebytes(raw_message)
+        self.fields = {}
+        for part in message.iter_parts():
+            name = part.get_param("name", header="content-disposition")
+            if not name:
+                continue
+            content = part.get_payload(decode=True) or b""
+            filename = part.get_filename()
+            if filename is None:
+                self.fields[name] = content.decode(part.get_content_charset() or "utf-8")
+            else:
+                self.fields[name] = type(
+                    "UploadedFile", (), {"file": io.BytesIO(content), "filename": filename}
+                )()
+
+    def __contains__(self, name):
+        return name in self.fields
+
+    def __getitem__(self, name):
+        return self.fields[name]
+
+    def getfirst(self, name, default=None):
+        return self.fields.get(name, default)
+
+
+def read_multipart_form(fp, headers, environ):
+    if cgi is not None:
+        return cgi.FieldStorage(fp=fp, headers=headers, environ=environ)
+    return MultipartForm(fp=fp, headers=headers, environ=environ)
 
 DEFAULT_MODEL_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
 DEFAULT_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
@@ -1458,28 +1514,123 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_header("Expires", "0")
         super().end_headers()
 
+    def send_json(self, status: int, payload: dict, session_cookie: str | None = None):
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        if session_cookie is not None:
+            self.send_header("Set-Cookie", session_cookie)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def read_json(self) -> dict:
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("JSON 请求体必须是对象。")
+        return payload
+
+    @staticmethod
+    def public_user(user: dict) -> dict:
+        return {
+            "id": user["id"],
+            "username": user["username"],
+            "displayName": user["display_name"],
+        }
+
+    @staticmethod
+    def session_cookie(token: str, max_age: int) -> str:
+        cookie = SimpleCookie()
+        cookie[SESSION_COOKIE_NAME] = token
+        morsel = cookie[SESSION_COOKIE_NAME]
+        morsel["path"] = "/"
+        morsel["httponly"] = True
+        morsel["samesite"] = "Lax"
+        morsel["max-age"] = max_age
+        return morsel.OutputString()
+
+    def current_user(self) -> dict | None:
+        try:
+            cookies = SimpleCookie(self.headers.get("Cookie", ""))
+        except CookieError:
+            return None
+        morsel = cookies.get(SESSION_COOKIE_NAME)
+        return None if morsel is None else APP_STORE.get_user_for_session(morsel.value)
+
+    def require_user(self) -> dict | None:
+        user = self.current_user()
+        if user:
+            return user
+        self.send_json(401, {"error": "请先登录。", "code": "AUTH_REQUIRED"})
+        return None
+
+    def handle_auth_register(self):
+        try:
+            payload = self.read_json()
+            user = APP_STORE.register_user(
+                payload.get("username", ""),
+                payload.get("password", ""),
+                payload.get("displayName", ""),
+            )
+            token = APP_STORE.create_session(user["id"])
+            self.send_json(201, {"user": self.public_user(user)}, self.session_cookie(token, 604800))
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(400, {"error": str(error), "code": "AUTH_INVALID_INPUT"})
+
+    def handle_auth_login(self):
+        try:
+            payload = self.read_json()
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(400, {"error": str(error), "code": "AUTH_INVALID_INPUT"})
+            return
+        user = APP_STORE.authenticate_user(payload.get("username", ""), payload.get("password", ""))
+        if user is None:
+            self.send_json(401, {"error": "用户名或密码错误。", "code": "AUTH_INVALID"})
+            return
+        token = APP_STORE.create_session(user["id"])
+        self.send_json(200, {"user": self.public_user(user)}, self.session_cookie(token, 604800))
+
+    def handle_auth_logout(self):
+        try:
+            cookies = SimpleCookie(self.headers.get("Cookie", ""))
+            morsel = cookies.get(SESSION_COOKIE_NAME)
+            if morsel is not None:
+                APP_STORE.delete_session(morsel.value)
+        except CookieError:
+            pass
+        self.send_json(200, {"ok": True}, self.session_cookie("", 0))
+
     def do_GET(self):
         path = unquote(self.path.split("?", 1)[0])
         if path == "/api/health":
-            body = json.dumps({"ok": True, "time": now_iso()}, ensure_ascii=False).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self.send_json(200, {"ok": True, "time": now_iso()})
+            return
+        if path == "/api/auth/me":
+            user = self.require_user()
+            if user:
+                self.send_json(200, {"user": self.public_user(user)})
+            return
+        if path.startswith("/api/") and not self.require_user():
             return
         if path == "/api/bpm-jobs":
-            body = json.dumps({"jobs": public_jobs()}, ensure_ascii=False).encode("utf-8")
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            self.send_json(200, {"jobs": public_jobs()})
             return
         super().do_GET()
 
     def do_POST(self):
-        path = unquote(self.path)
+        path = unquote(self.path.split("?", 1)[0])
+        if path == "/api/auth/register":
+            self.handle_auth_register()
+            return
+        if path == "/api/auth/login":
+            self.handle_auth_login()
+            return
+        if path == "/api/auth/logout":
+            self.handle_auth_logout()
+            return
+        if path.startswith("/api/") and not self.require_user():
+            return
         if path == "/api/generate-report":
             self.handle_generate_report()
             return
@@ -1559,7 +1710,7 @@ class Handler(SimpleHTTPRequestHandler):
     def handle_generate_report(self):
         try:
             runtime_log(f"generate-report start from={self.client_address[0]} length={self.headers.get('Content-Length', '0')}")
-            form = cgi.FieldStorage(
+            form = read_multipart_form(
                 fp=self.rfile,
                 headers=self.headers,
                 environ={
@@ -1597,7 +1748,7 @@ class Handler(SimpleHTTPRequestHandler):
     def handle_import_bpm_sources(self):
         try:
             runtime_log(f"import-bpm-sources start from={self.client_address[0]} length={self.headers.get('Content-Length', '0')}")
-            form = cgi.FieldStorage(
+            form = read_multipart_form(
                 fp=self.rfile,
                 headers=self.headers,
                 environ={
