@@ -1,4 +1,6 @@
 import base64
+import inspect
+import json
 import os
 import sqlite3
 import tempfile
@@ -216,17 +218,20 @@ class AppStoreJobTests(unittest.TestCase):
         self.store.create_job(
             self.other_user_id, "topic", "另一用户选题", {"createdBy": "李编辑"}
         )
-        with self.assertRaisesRegex(ValueError, "credentials"):
-            self.store.create_job(
-                self.user_id,
-                "topic",
-                "不能持久化可信载荷",
-                {"bpm": {"password": "test-bpm-password"}},
-            )
+        redacted = self.store.create_job(
+            self.user_id,
+            "topic",
+            "不能持久化可信载荷",
+            {"bpm": {"password": "test-bpm-password"}},
+        )
+        self.assertEqual(redacted["bpm"]["password"], "[REDACTED]")
 
         reopened = AppStore(self.db_path, self.key)
         jobs = reopened.list_jobs(self.user_id)
-        self.assertEqual({item["status"] for item in jobs}, {"succeeded", "failed"})
+        self.assertEqual(
+            {item["status"] for item in jobs if item["id"] in {job["id"], failed["id"]}},
+            {"succeeded", "failed"},
+        )
         persisted = next(item for item in jobs if item["id"] == job["id"])
         self.assertEqual(persisted["status"], "succeeded")
         self.assertEqual(persisted["createdBy"], "张编辑")
@@ -245,6 +250,56 @@ class AppStoreJobTests(unittest.TestCase):
         self.store.append_job_log(job["id"], self.other_user_id, "越权日志")
         self.assertEqual(self.store.list_jobs(self.user_id)[0]["status"], "queued")
         self.assertEqual(self.store.list_jobs(self.user_id)[0]["logs"], [])
+
+    def test_job_storage_redacts_sensitive_payload_results_errors_and_logs(self):
+        secrets_to_scan = {
+            "test-bpm-password",
+            "deepseek-api-key",
+            "api-key-value",
+            "authorization-value",
+            "token-value",
+            "secret-value",
+            "Bearer bearer-value",
+            "sk-test-key-value",
+        }
+        job = self.store.create_job(
+            self.user_id,
+            "topic",
+            "脱敏测试",
+            {
+                "bpm": {"password": "test-bpm-password"},
+                "api_key": "deepseek-api-key",
+                "apiKey": "api-key-value",
+                "authorization": "authorization-value",
+                "token": "token-value",
+                "secret": "secret-value",
+                "message": "Authorization: Bearer bearer-value sk-test-key-value",
+            },
+        )
+        self.store.update_job(
+            job["id"],
+            self.user_id,
+            "succeeded",
+            result={
+                "password": "test-bpm-password",
+                "detail": "Bearer bearer-value sk-test-key-value",
+            },
+            error_summary="BPM password: test-bpm-password; apiKey=api-key-value",
+        )
+        self.store.append_job_log(
+            job["id"],
+            self.user_id,
+            "token=token-value Authorization: Bearer bearer-value sk-test-key-value",
+        )
+
+        persisted = self.store.list_jobs(self.user_id)[0]
+        self.assertIn("[REDACTED]", json.dumps(persisted, ensure_ascii=False))
+        for secret in secrets_to_scan:
+            self.assertNotIn(secret, self.database_text())
+
+    def test_create_job_reads_the_new_record_with_its_owner(self):
+        source = inspect.getsource(AppStore.create_job)
+        self.assertIn("WHERE id = ? AND user_id = ?", source)
 
 
 if __name__ == "__main__":

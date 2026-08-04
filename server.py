@@ -997,17 +997,7 @@ def bpm_topic_preview(topic: dict) -> dict:
 
 
 def redact_bpm_secret(value, password: str):
-    if isinstance(value, dict):
-        return {
-            key: redact_bpm_secret(nested_value, password)
-            for key, nested_value in value.items()
-            if key.lower() not in {"password", "token", "authorization", "cookie"}
-        }
-    if isinstance(value, list):
-        return [redact_bpm_secret(nested_value, password) for nested_value in value]
-    if isinstance(value, str) and password:
-        return value.replace(password, "[已隐藏]")
-    return value
+    return APP_STORE.sanitize_job_data(value, known_secrets=(password,))
 
 
 def trusted_bpm_payload(payload: dict, user: dict) -> tuple[dict, dict]:
@@ -1064,25 +1054,65 @@ def create_bpm_job(payload: dict, user: dict, job_type: str = "topic") -> dict:
     return APP_STORE.list_jobs(user_id, limit=1)[0]
 
 
-def bpm_job_worker():
+def log_job_storage_failure(job_id: str, operation: str, error: Exception):
+    runtime_log(
+        f"bpm-job storage failure job={job_id} operation={operation} type={type(error).__name__}"
+    )
+
+
+def update_bpm_job(job_id: str, user_id: int, status: str, result=None, error_summary=None):
+    try:
+        APP_STORE.update_job(job_id, user_id, status, result=result, error_summary=error_summary)
+    except Exception as error:
+        log_job_storage_failure(job_id, "update", error)
+
+
+def append_bpm_job_log(job_id: str, user_id: int, message: str):
+    try:
+        APP_STORE.append_job_log(job_id, user_id, message)
+    except Exception as error:
+        log_job_storage_failure(job_id, "append-log", error)
+
+
+def process_bpm_job(job_id: str, user_id: int, job_type: str, payload: dict):
+    job_label = "作译者维护" if job_type == "author" else "选题填报"
+    password = payload.get("bpm", {}).get("password", "")
+    update_bpm_job(job_id, user_id, "running")
+    append_bpm_job_log(job_id, user_id, f"开始登录 BPM 并执行{job_label}")
+    try:
+        result = run_bpm_author_submit(payload) if job_type == "author" else run_bpm_topic_submit(payload)
+        public_result = redact_bpm_secret(result, password)
+        update_bpm_job(job_id, user_id, "succeeded", result=public_result)
+        title = result.get("authorName") or result.get("title") or result.get("expectedBookName") or job_label
+        append_bpm_job_log(job_id, user_id, f"{job_label}完成：{redact_bpm_secret(str(title), password)}")
+    except Exception as error:
+        error_summary = redact_bpm_secret(str(error), password)
+        update_bpm_job(job_id, user_id, "failed", error_summary=error_summary)
+        append_bpm_job_log(job_id, user_id, f"{job_label}失败：{error_summary}")
+
+
+def bpm_job_worker(work_queue=None, stop_event=None):
+    work_queue = JOB_QUEUE if work_queue is None else work_queue
     while True:
-        job_id, user_id, job_type, payload = JOB_QUEUE.get()
-        job_label = "作译者维护" if job_type == "author" else "选题填报"
-        APP_STORE.update_job(job_id, user_id, "running")
-        APP_STORE.append_job_log(job_id, user_id, f"开始登录 BPM 并执行{job_label}")
+        if stop_event is not None and stop_event.is_set():
+            return
         try:
-            result = run_bpm_author_submit(payload) if job_type == "author" else run_bpm_topic_submit(payload)
-            public_result = redact_bpm_secret(result, payload.get("bpm", {}).get("password", ""))
-            APP_STORE.update_job(job_id, user_id, "succeeded", result=public_result)
-            title = result.get("authorName") or result.get("title") or result.get("expectedBookName") or job_label
-            APP_STORE.append_job_log(job_id, user_id, f"{job_label}完成：{title}")
-        except Exception as exc:
-            error_summary = redact_bpm_secret(str(exc), payload.get("bpm", {}).get("password", ""))
-            APP_STORE.update_job(job_id, user_id, "failed", error_summary=error_summary)
-            APP_STORE.append_job_log(job_id, user_id, f"{job_label}失败：{error_summary}")
+            item = work_queue.get(timeout=0.1 if stop_event is not None else None)
+        except queue.Empty:
+            continue
+        payload = {}
+        job_id = "unknown"
+        try:
+            job_id, user_id, job_type, payload = item
+            process_bpm_job(job_id, user_id, job_type, payload)
+        except Exception as error:
+            runtime_log(f"bpm-job worker failure job={job_id} type={type(error).__name__}")
         finally:
-            payload.get("bpm", {}).pop("password", None)
-            JOB_QUEUE.task_done()
+            try:
+                if isinstance(payload, dict):
+                    payload.get("bpm", {}).pop("password", None)
+            finally:
+                work_queue.task_done()
 
 
 threading.Thread(target=bpm_job_worker, daemon=True).start()

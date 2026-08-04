@@ -34,12 +34,20 @@ JOB_RESERVED_PAYLOAD_KEYS = {
 }
 SENSITIVE_JOB_PAYLOAD_KEYS = {
     "password",
+    "bpm_password",
     "token",
     "api_key",
     "apikey",
     "authorization",
     "cookie",
+    "secret",
 }
+REDACTED_JOB_VALUE = "[REDACTED]"
+SENSITIVE_JOB_ASSIGNMENT_RE = re.compile(
+    r"(?i)(\b(?:bpm[ _-]?)?(?:password|api[ _-]?key|authorization|token|secret)\b\s*[:=]\s*)([^\s,;]+)"
+)
+BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
+API_KEY_VALUE_RE = re.compile(r"\bsk-[A-Za-z0-9_-]+\b", re.IGNORECASE)
 
 
 class CredentialConfigurationError(ValueError):
@@ -391,7 +399,7 @@ class AppStore:
         if forbidden:
             raise ValueError("public job payload cannot override job fields")
 
-        cls._validate_public_job_value(public_payload)
+        public_payload = cls.sanitize_job_data(public_payload)
         try:
             json.dumps(public_payload, ensure_ascii=False, separators=(",", ":"))
         except (TypeError, ValueError) as error:
@@ -399,18 +407,43 @@ class AppStore:
         return public_payload
 
     @classmethod
-    def _validate_public_job_value(cls, value) -> None:
-        def check(nested_value):
-            if isinstance(nested_value, dict):
-                for key, child_value in nested_value.items():
-                    if str(key).lower() in SENSITIVE_JOB_PAYLOAD_KEYS:
-                        raise ValueError("public job data cannot contain credentials")
-                    check(child_value)
-            elif isinstance(nested_value, list):
-                for child_value in nested_value:
-                    check(child_value)
+    def sanitize_job_data(cls, value, known_secrets=()):
+        secrets_to_redact = tuple(
+            secret for secret in known_secrets if isinstance(secret, str) and secret
+        )
 
-        check(value)
+        def sanitize_text(text: str) -> str:
+            sanitized = SENSITIVE_JOB_ASSIGNMENT_RE.sub(
+                lambda match: f"{match.group(1)}{REDACTED_JOB_VALUE}", text
+            )
+            sanitized = BEARER_TOKEN_RE.sub(f"Bearer {REDACTED_JOB_VALUE}", sanitized)
+            sanitized = API_KEY_VALUE_RE.sub(REDACTED_JOB_VALUE, sanitized)
+            for secret in secrets_to_redact:
+                sanitized = sanitized.replace(secret, REDACTED_JOB_VALUE)
+            return sanitized
+
+        def sanitize(nested_value):
+            if isinstance(nested_value, dict):
+                return {
+                    key: REDACTED_JOB_VALUE
+                    if cls._is_sensitive_job_key(key)
+                    else sanitize(child_value)
+                    for key, child_value in nested_value.items()
+                }
+            if isinstance(nested_value, (list, tuple)):
+                return [sanitize(child_value) for child_value in nested_value]
+            if isinstance(nested_value, str):
+                return sanitize_text(nested_value)
+            return nested_value
+
+        return sanitize(value)
+
+    @staticmethod
+    def _is_sensitive_job_key(key) -> bool:
+        normalized = re.sub(r"[^a-z0-9]", "", str(key).lower())
+        if normalized in {item.replace("_", "") for item in SENSITIVE_JOB_PAYLOAD_KEYS}:
+            return True
+        return normalized.endswith(("password", "apikey", "authorization", "token", "secret"))
 
     @classmethod
     def _job_from_row(cls, row: sqlite3.Row) -> dict:
@@ -434,6 +467,7 @@ class AppStore:
             raise ValueError("job_type is required")
         if not isinstance(title, str) or not title.strip():
             raise ValueError("title is required")
+        title = self.sanitize_job_data(title).strip()
         payload = self._validate_public_job_payload(public_payload)
         now = self._job_timestamp()
         job_id = uuid.uuid4().hex[:12]
@@ -458,7 +492,9 @@ class AppStore:
                 )
             except sqlite3.IntegrityError as error:
                 raise ValueError("user does not exist") from error
-            row = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE id = ? AND user_id = ?", (job_id, user_id)
+            ).fetchone()
         return self._job_from_row(row)
 
     def update_job(
@@ -473,8 +509,9 @@ class AppStore:
             raise ValueError("invalid job status")
         if error_summary is not None and not isinstance(error_summary, str):
             raise ValueError("error_summary must be a string")
+        result = self.sanitize_job_data(result)
+        error_summary = self.sanitize_job_data(error_summary)
         try:
-            self._validate_public_job_value(result)
             result_json = None if result is None else json.dumps(
                 result, ensure_ascii=False, separators=(",", ":")
             )
@@ -509,6 +546,7 @@ class AppStore:
     def append_job_log(self, job_id: str, user_id: int, message: str) -> None:
         if not isinstance(message, str) or not message.strip():
             raise ValueError("job log message is required")
+        message = self.sanitize_job_data(message).strip()
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT logs_json FROM jobs WHERE id = ? AND user_id = ?", (job_id, user_id)

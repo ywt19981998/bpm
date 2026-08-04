@@ -3,6 +3,7 @@ import base64
 import io
 import json
 import os
+import queue
 import tempfile
 import threading
 import unittest
@@ -342,6 +343,50 @@ class ServerJobHttpTests(unittest.TestCase):
         status, _, body = self.request("GET", "/api/bpm-jobs", cookie=self.cookie)
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["jobs"][0]["id"], job["id"])
+
+    def test_worker_continues_after_storage_failures_and_completes_next_job(self):
+        user = server.APP_STORE.get_user_for_session(self.cookie.split("=", 1)[1])
+        first = server.APP_STORE.create_job(user["id"], "topic", "第一任务", {})
+        second = server.APP_STORE.create_job(user["id"], "topic", "第二任务", {})
+        work_queue = queue.Queue()
+        stop_event = threading.Event()
+        work_queue.put((first["id"], user["id"], "topic", {"title": "第一任务", "bpm": {}}))
+        work_queue.put((second["id"], user["id"], "topic", {"title": "第二任务", "bpm": {}}))
+        original_update = server.APP_STORE.update_job
+        original_append = server.APP_STORE.append_job_log
+        update_failed = False
+        append_failed = False
+
+        def flaky_update(*args, **kwargs):
+            nonlocal update_failed
+            if not update_failed:
+                update_failed = True
+                raise OSError("temporary update failure")
+            return original_update(*args, **kwargs)
+
+        def flaky_append(*args, **kwargs):
+            nonlocal append_failed
+            if not append_failed:
+                append_failed = True
+                raise OSError("temporary log failure")
+            return original_append(*args, **kwargs)
+
+        with patch.object(server.APP_STORE, "update_job", side_effect=flaky_update), patch.object(
+            server.APP_STORE, "append_job_log", side_effect=flaky_append
+        ), patch("server.run_bpm_topic_submit", side_effect=[{"title": "第一任务"}, {"title": "第二任务"}]) as submit:
+            worker = threading.Thread(
+                target=server.bpm_job_worker, args=(work_queue, stop_event), daemon=True
+            )
+            worker.start()
+            work_queue.join()
+            stop_event.set()
+            worker.join(timeout=2)
+
+        self.assertTrue(update_failed)
+        self.assertTrue(append_failed)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual([call.args[0]["title"] for call in submit.call_args_list], ["第一任务", "第二任务"])
+        self.assertEqual(server.APP_STORE.list_jobs(user["id"])[0]["status"], "succeeded")
 
 
 class MultipartFormTests(unittest.TestCase):

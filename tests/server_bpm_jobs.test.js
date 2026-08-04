@@ -33,7 +33,7 @@ test('backend invokes isolated Playwright modes', () => {
 test('worker dispatches jobs by explicit type', () => {
   assert.match(source, /job_type\s*==\s*"author"/);
   assert.match(source, /APP_STORE\.create_job\(\s*user_id,\s*job_type,/s);
-  assert.match(source, /APP_STORE\.update_job\(job_id,\s*user_id,\s*"succeeded"/);
+  assert.match(source, /update_bpm_job\(job_id,\s*user_id,\s*"succeeded"/);
 });
 
 test('BPM jobs use authenticated server-side credentials', () => {
