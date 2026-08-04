@@ -1462,6 +1462,7 @@
     const loginError = document.getElementById("loginError");
     const registerError = document.getElementById("registerError");
     const currentUserName = document.getElementById("currentUserName");
+    const authBusy = new AuthBusyState();
     const authSession = new AuthSessionGeneration();
 
     sections.forEach((section) => {
@@ -1474,6 +1475,32 @@
     function setAuthError(element, message = "") {
       element.textContent = message;
       element.hidden = !message;
+    }
+
+    function authSubmitButton(form) {
+      return form.querySelector('button[type="submit"]');
+    }
+
+    function resetAuthForms() {
+      authBusy.reset();
+      [loginForm, registerForm].forEach((form) => {
+        authSubmitButton(form).disabled = false;
+        form.removeAttribute("aria-busy");
+      });
+    }
+
+    function beginAuthSubmission(form) {
+      const busy = authBusy.begin(form.id);
+      authSubmitButton(form).disabled = true;
+      form.setAttribute("aria-busy", "true");
+      return busy;
+    }
+
+    function finishAuthSubmission(form, busy) {
+      if (!authBusy.finish(busy)) return false;
+      authSubmitButton(form).disabled = false;
+      form.removeAttribute("aria-busy");
+      return true;
     }
 
     function captureSession() {
@@ -1574,6 +1601,7 @@
 
     function showAuthView(mode = "login") {
       authSession.clear();
+      resetAuthForms();
       clearWorkspaceState();
       currentUser = null;
       currentUserName.textContent = "";
@@ -1591,6 +1619,7 @@
 
     function showWorkspace(user) {
       authSession.activate(user);
+      resetAuthForms();
       clearWorkspaceState();
       currentUser = user;
       loadUserDraft(user);
@@ -1642,8 +1671,7 @@
 
     async function submitAuthForm(form, errorElement, endpoint, payload) {
       const session = authSession.clear();
-      const button = form.querySelector('button[type="submit"]');
-      button.disabled = true;
+      const busy = beginAuthSubmission(form);
       setAuthError(errorElement);
       try {
         const response = await apiFetch(endpoint, {
@@ -1671,7 +1699,7 @@
       } catch (error) {
         if (isCurrentSession(session)) setAuthError(errorElement, "无法连接服务，请稍后重试");
       } finally {
-        if (isCurrentSession(session)) button.disabled = false;
+        finishAuthSubmission(form, busy);
       }
     }
 

@@ -85,3 +85,12 @@ test("async workspace operations capture and verify the active session generatio
     assert.match(source, new RegExp(`apiFetch\\("${escaped}",[\\s\\S]*?session`));
   });
 });
+
+test("auth view changes reset form busy state while stale submissions cannot restore it", () => {
+  assert.match(source, /const authBusy = new AuthBusyState\(\)/);
+  assert.match(source, /function resetAuthForms\(\)[\s\S]*authBusy\.reset\(\)[\s\S]*authSubmitButton\(form\)\.disabled = false[\s\S]*removeAttribute\("aria-busy"\)/);
+  assert.match(source, /function showAuthView\([^)]*\)[\s\S]*resetAuthForms\(\)/);
+  assert.match(source, /function showWorkspace\([^)]*\)[\s\S]*resetAuthForms\(\)/);
+  assert.match(source, /const busy = beginAuthSubmission\(form\)/);
+  assert.match(source, /finishAuthSubmission\(form, busy\)/);
+});

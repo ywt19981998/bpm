@@ -1,10 +1,12 @@
 (function exposeAuthSessionGeneration(root, factory) {
-  const AuthSessionGeneration = factory();
+  const { AuthBusyState, AuthSessionGeneration } = factory();
+  root.AuthBusyState = AuthBusyState;
   root.AuthSessionGeneration = AuthSessionGeneration;
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { AuthSessionGeneration };
+    module.exports = { AuthBusyState, AuthSessionGeneration };
   }
-})(globalThis, () => class AuthSessionGeneration {
+})(globalThis, () => {
+class AuthSessionGeneration {
   constructor() {
     this.generation = 0;
     this.userId = null;
@@ -37,4 +39,34 @@
     commit();
     return true;
   }
+}
+
+class AuthBusyState {
+  constructor() {
+    this.generation = 0;
+    this.busyForms = new Set();
+  }
+
+  begin(formId) {
+    this.busyForms.add(formId);
+    return { generation: this.generation, formId };
+  }
+
+  finish(snapshot) {
+    if (!snapshot || snapshot.generation !== this.generation) return false;
+    this.busyForms.delete(snapshot.formId);
+    return true;
+  }
+
+  reset() {
+    this.generation += 1;
+    this.busyForms.clear();
+  }
+
+  isBusy(formId) {
+    return this.busyForms.has(formId);
+  }
+}
+
+return { AuthBusyState, AuthSessionGeneration };
 });

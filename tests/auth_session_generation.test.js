@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { AuthSessionGeneration } = require("../auth_session_generation.js");
+const { AuthBusyState, AuthSessionGeneration } = require("../auth_session_generation.js");
 
 function deferred() {
   let resolve;
@@ -39,4 +39,26 @@ test("invalidates concurrent auth restoration when a newer user becomes active",
 
   assert.equal(session.isCurrent(restoringSession), false);
   assert.equal(session.isCurrent(session.capture()), true);
+});
+
+test("cancelling auth resets both forms and ignores the stale request finally", async () => {
+  const busy = new AuthBusyState();
+  const pendingLogin = busy.begin("loginForm");
+  const delayedLogin = deferred();
+  const finishLogin = delayedLogin.promise.finally(() => busy.finish(pendingLogin));
+
+  assert.equal(busy.isBusy("loginForm"), true);
+
+  busy.reset();
+  assert.equal(busy.isBusy("loginForm"), false);
+  assert.equal(busy.isBusy("registerForm"), false);
+
+  const pendingRegister = busy.begin("registerForm");
+  delayedLogin.resolve();
+  await finishLogin;
+
+  assert.equal(busy.isBusy("loginForm"), false);
+  assert.equal(busy.isBusy("registerForm"), true);
+  assert.equal(busy.finish(pendingRegister), true);
+  assert.equal(busy.isBusy("registerForm"), false);
 });
