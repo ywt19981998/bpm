@@ -1,11 +1,17 @@
 import base64
+import binascii
 import hashlib
 import hmac
+import json
+import os
 import re
 import secrets
 import sqlite3
 import time
 from pathlib import Path
+
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 
 USERNAME_RE = re.compile(r"[a-z0-9._-]{3,40}\Z")
@@ -13,6 +19,10 @@ SCRYPT_N = 16384
 SCRYPT_R = 8
 SCRYPT_P = 1
 SCRYPT_DKLEN = 32
+
+
+class CredentialConfigurationError(ValueError):
+    pass
 
 
 class AppStore:
@@ -68,6 +78,24 @@ class AppStore:
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (1, int(time.time())),
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS integration_credentials (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    system_type TEXT NOT NULL,
+                    ciphertext BLOB NOT NULL,
+                    nonce BLOB NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    UNIQUE(user_id, system_type)
+                )
+                """
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (2, int(time.time())),
             )
 
     @staticmethod
@@ -188,3 +216,112 @@ class AppStore:
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         with self.connect() as connection:
             connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+
+    def _credential_key(self) -> bytes:
+        if not isinstance(self.credential_key, str) or not self.credential_key:
+            raise CredentialConfigurationError("APP_CREDENTIAL_KEY must be a 32-byte URL-safe base64 key")
+        try:
+            padding = "=" * (-len(self.credential_key) % 4)
+            key = base64.b64decode(
+                self.credential_key + padding,
+                altchars=b"-_",
+                validate=True,
+            )
+        except (binascii.Error, ValueError, TypeError) as error:
+            raise CredentialConfigurationError(
+                "APP_CREDENTIAL_KEY must be a 32-byte URL-safe base64 key"
+            ) from error
+        if len(key) != 32:
+            raise CredentialConfigurationError("APP_CREDENTIAL_KEY must decode to exactly 32 bytes")
+        return key
+
+    @staticmethod
+    def _credential_associated_data(user_id: int, system_type: str) -> bytes:
+        return f"{user_id}:{system_type}:v1".encode("utf-8")
+
+    @staticmethod
+    def _mask_account(account: str) -> str:
+        if len(account) <= 2:
+            return "*" * len(account)
+        return f"{account[0]}{'*' * max(3, len(account) - 2)}{account[-1]}"
+
+    def put_integration_credentials(
+        self, user_id: int, system_type: str, account: str, password: str
+    ) -> None:
+        key = self._credential_key()
+        account = account.strip()
+        payload = json.dumps(
+            {"account": account, "password": password},
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        nonce = os.urandom(12)
+        associated_data = self._credential_associated_data(user_id, system_type)
+        ciphertext = AESGCM(key).encrypt(nonce, payload, associated_data)
+        now = int(time.time())
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO integration_credentials(
+                    user_id, system_type, ciphertext, nonce, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, system_type) DO UPDATE SET
+                    ciphertext = excluded.ciphertext,
+                    nonce = excluded.nonce,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, system_type, ciphertext, nonce, now, now),
+            )
+
+    def get_integration_credentials(self, user_id: int, system_type: str) -> dict | None:
+        key = self._credential_key()
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT ciphertext, nonce
+                FROM integration_credentials
+                WHERE user_id = ? AND system_type = ?
+                """,
+                (user_id, system_type),
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            payload = AESGCM(key).decrypt(
+                row["nonce"],
+                row["ciphertext"],
+                self._credential_associated_data(user_id, system_type),
+            )
+            credentials = json.loads(payload.decode("utf-8"))
+        except (InvalidTag, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as error:
+            raise CredentialConfigurationError("integration credentials could not be decrypted") from error
+        if not isinstance(credentials, dict) or not {"account", "password"} <= credentials.keys():
+            raise CredentialConfigurationError("integration credentials payload is invalid")
+        return {"account": credentials["account"], "password": credentials["password"]}
+
+    def get_integration_status(self, user_id: int, system_type: str) -> dict:
+        self._credential_key()
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT ciphertext, nonce
+                FROM integration_credentials
+                WHERE user_id = ? AND system_type = ?
+                """,
+                (user_id, system_type),
+            ).fetchone()
+        if row is None:
+            return {"configured": False, "accountMasked": None}
+        credentials = self.get_integration_credentials(user_id, system_type)
+        return {
+            "configured": True,
+            "accountMasked": self._mask_account(credentials["account"]),
+        }
+
+    def delete_integration_credentials(self, user_id: int, system_type: str) -> None:
+        self._credential_key()
+        with self.connect() as connection:
+            connection.execute(
+                "DELETE FROM integration_credentials WHERE user_id = ? AND system_type = ?",
+                (user_id, system_type),
+            )
