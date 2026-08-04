@@ -1505,6 +1505,16 @@
       return true;
     }
 
+    function restoreAuthControlsAfterLogout() {
+      if (shouldRestoreAuthControls({
+        authViewVisible: !authView.hidden,
+        currentUser,
+        isBusy: authBusy.isBusy()
+      })) {
+        resetAuthForms();
+      }
+    }
+
     function captureSession() {
       return authSession.capture();
     }
@@ -2342,7 +2352,9 @@
       } catch (error) {
         if (isCurrentSession(session)) errorMessage = "退出登录失败，请重新登录";
       } finally {
-        if (!authBusy.finish(busy) || !isCurrentSession(session)) return;
+        if (!authBusy.finish(busy)) return;
+        restoreAuthControlsAfterLogout();
+        if (!isCurrentSession(session)) return;
         if (loggedOut) {
           setAuthError(loginError);
           setAuthError(registerError);

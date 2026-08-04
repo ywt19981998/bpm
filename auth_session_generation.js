@@ -1,9 +1,10 @@
 (function exposeAuthSessionGeneration(root, factory) {
-  const { AuthBusyState, AuthSessionGeneration } = factory();
+  const { AuthBusyState, AuthSessionGeneration, shouldRestoreAuthControls } = factory();
   root.AuthBusyState = AuthBusyState;
   root.AuthSessionGeneration = AuthSessionGeneration;
+  root.shouldRestoreAuthControls = shouldRestoreAuthControls;
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { AuthBusyState, AuthSessionGeneration };
+    module.exports = { AuthBusyState, AuthSessionGeneration, shouldRestoreAuthControls };
   }
 })(globalThis, () => {
 class AuthSessionGeneration {
@@ -69,5 +70,9 @@ class AuthBusyState {
   }
 }
 
-return { AuthBusyState, AuthSessionGeneration };
+function shouldRestoreAuthControls({ authViewVisible, currentUser, isBusy }) {
+  return Boolean(authViewVisible && currentUser === null && !isBusy);
+}
+
+return { AuthBusyState, AuthSessionGeneration, shouldRestoreAuthControls };
 });

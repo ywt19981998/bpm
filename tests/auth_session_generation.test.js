@@ -1,7 +1,11 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { AuthBusyState, AuthSessionGeneration } = require("../auth_session_generation.js");
+const {
+  AuthBusyState,
+  AuthSessionGeneration,
+  shouldRestoreAuthControls
+} = require("../auth_session_generation.js");
 
 function deferred() {
   let resolve;
@@ -73,6 +77,40 @@ test("keeps a delayed logout exclusive until its response has completed", async 
   delayedLogout.resolve();
   await finishLogout;
 
+  const pendingLogin = busy.begin("loginForm");
+  assert.ok(pendingLogin);
+  assert.equal(busy.finish(pendingLogin), true);
+});
+
+test("recovers auth controls when a background 401 stales a pending logout", async () => {
+  const busy = new AuthBusyState();
+  const session = new AuthSessionGeneration();
+  session.activate({ id: 1 });
+  const logoutSession = session.capture();
+  const pendingLogout = busy.begin("logout");
+  const delayedLogout = deferred();
+  let authViewVisible = false;
+  let currentUser = { id: 1 };
+  let authControlsDisabled = true;
+
+  assert.ok(pendingLogout);
+  assert.equal(busy.begin("loginForm"), null);
+
+  // A concurrent business request receives 401 and moves the page to login.
+  session.clear();
+  currentUser = null;
+  authViewVisible = true;
+  assert.equal(session.isCurrent(logoutSession), false);
+  assert.equal(authControlsDisabled, true);
+
+  delayedLogout.resolve();
+  await delayedLogout.promise;
+  assert.equal(busy.finish(pendingLogout), true);
+  if (shouldRestoreAuthControls({ authViewVisible, currentUser, isBusy: busy.isBusy() })) {
+    authControlsDisabled = false;
+  }
+
+  assert.equal(authControlsDisabled, false);
   const pendingLogin = busy.begin("loginForm");
   assert.ok(pendingLogin);
   assert.equal(busy.finish(pendingLogin), true);

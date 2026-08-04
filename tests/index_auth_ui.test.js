@@ -148,6 +148,15 @@ test("logout holds the auth lock until its request completes", () => {
   );
 });
 
+test("stale logout cleanup restores a visible unauthenticated auth view after releasing its lock", () => {
+  const start = source.indexOf('document.getElementById("logoutButton").addEventListener');
+  const end = source.indexOf('document.getElementById("chooseFile")', start);
+  const logoutHandler = source.slice(start, end);
+
+  assert.match(source, /function restoreAuthControlsAfterLogout\(\)[\s\S]*shouldRestoreAuthControls/);
+  assert.match(logoutHandler, /if \(!authBusy\.finish\(busy\)\) return;\s*restoreAuthControlsAfterLogout\(\);\s*if \(!isCurrentSession\(session\)\) return;/);
+});
+
 test("loads only local fixed-version scripts and keeps Lucide initialization", () => {
   assert.doesNotMatch(source, /<script[^>]+src=["']https?:\/\//i);
   assert.doesNotMatch(source, /@latest/i);
