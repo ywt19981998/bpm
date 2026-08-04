@@ -1091,6 +1091,17 @@ def process_bpm_job(job_id: str, user_id: int, job_type: str, payload: dict):
         append_bpm_job_log(job_id, user_id, f"{job_label}失败：{error_summary}")
 
 
+def clear_bpm_job_password(payload):
+    try:
+        if not isinstance(payload, dict):
+            return
+        bpm = payload.get("bpm")
+        if isinstance(bpm, dict):
+            bpm.pop("password", None)
+    except Exception:
+        pass
+
+
 def bpm_job_worker(work_queue=None, stop_event=None):
     work_queue = JOB_QUEUE if work_queue is None else work_queue
     while True:
@@ -1109,8 +1120,7 @@ def bpm_job_worker(work_queue=None, stop_event=None):
             runtime_log(f"bpm-job worker failure job={job_id} type={type(error).__name__}")
         finally:
             try:
-                if isinstance(payload, dict):
-                    payload.get("bpm", {}).pop("password", None)
+                clear_bpm_job_password(payload)
             finally:
                 work_queue.task_done()
 

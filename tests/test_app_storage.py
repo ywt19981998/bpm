@@ -260,6 +260,8 @@ class AppStoreJobTests(unittest.TestCase):
             "token-value",
             "secret-value",
             "Bearer bearer-value",
+            "bearer-value",
+            "bearer-spaced-value",
             "sk-test-key-value",
         }
         job = self.store.create_job(
@@ -273,7 +275,10 @@ class AppStoreJobTests(unittest.TestCase):
                 "authorization": "authorization-value",
                 "token": "token-value",
                 "secret": "secret-value",
-                "message": "Authorization: Bearer bearer-value sk-test-key-value",
+                "message": (
+                    "Authorization: Bearer bearer-value sk-test-key-value; "
+                    "aUtHoRiZaTiOn :    bEaReR bearer-spaced-value"
+                ),
             },
         )
         self.store.update_job(

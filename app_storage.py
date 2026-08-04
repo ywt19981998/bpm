@@ -46,6 +46,9 @@ REDACTED_JOB_VALUE = "[REDACTED]"
 SENSITIVE_JOB_ASSIGNMENT_RE = re.compile(
     r"(?i)(\b(?:bpm[ _-]?)?(?:password|api[ _-]?key|authorization|token|secret)\b\s*[:=]\s*)([^\s,;]+)"
 )
+AUTHORIZATION_BEARER_RE = re.compile(
+    r"(?i)\bauthorization\s*:\s*bearer\s+[^\s,;]+"
+)
 BEARER_TOKEN_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
 API_KEY_VALUE_RE = re.compile(r"\bsk-[A-Za-z0-9_-]+\b", re.IGNORECASE)
 
@@ -413,10 +416,13 @@ class AppStore:
         )
 
         def sanitize_text(text: str) -> str:
-            sanitized = SENSITIVE_JOB_ASSIGNMENT_RE.sub(
-                lambda match: f"{match.group(1)}{REDACTED_JOB_VALUE}", text
+            sanitized = AUTHORIZATION_BEARER_RE.sub(
+                f"Authorization: Bearer {REDACTED_JOB_VALUE}", text
             )
             sanitized = BEARER_TOKEN_RE.sub(f"Bearer {REDACTED_JOB_VALUE}", sanitized)
+            sanitized = SENSITIVE_JOB_ASSIGNMENT_RE.sub(
+                lambda match: f"{match.group(1)}{REDACTED_JOB_VALUE}", sanitized
+            )
             sanitized = API_KEY_VALUE_RE.sub(REDACTED_JOB_VALUE, sanitized)
             for secret in secrets_to_redact:
                 sanitized = sanitized.replace(secret, REDACTED_JOB_VALUE)

@@ -388,6 +388,43 @@ class ServerJobHttpTests(unittest.TestCase):
         self.assertEqual([call.args[0]["title"] for call in submit.call_args_list], ["第一任务", "第二任务"])
         self.assertEqual(server.APP_STORE.list_jobs(user["id"])[0]["status"], "succeeded")
 
+    def test_worker_survives_malformed_bpm_payload_cleanup_and_completes_next_job(self):
+        user = server.APP_STORE.get_user_for_session(self.cookie.split("=", 1)[1])
+        malformed = server.APP_STORE.create_job(user["id"], "topic", "畸形任务", {})
+        next_job = server.APP_STORE.create_job(user["id"], "topic", "后续任务", {})
+        work_queue = queue.Queue()
+        stop_event = threading.Event()
+        completed = threading.Event()
+        task_done_calls = 0
+        original_task_done = work_queue.task_done
+
+        def counting_task_done():
+            nonlocal task_done_calls
+            task_done_calls += 1
+            original_task_done()
+
+        work_queue.task_done = counting_task_done
+        work_queue.put((malformed["id"], user["id"], "topic", {"bpm": None}))
+        work_queue.put((next_job["id"], user["id"], "topic", {"title": "后续任务", "bpm": {}}))
+
+        def submit(payload):
+            completed.set()
+            return {"title": payload["title"]}
+
+        with patch("server.run_bpm_topic_submit", side_effect=submit):
+            worker = threading.Thread(
+                target=server.bpm_job_worker, args=(work_queue, stop_event), daemon=True
+            )
+            worker.start()
+            self.assertTrue(completed.wait(timeout=2))
+            work_queue.join()
+            stop_event.set()
+            worker.join(timeout=2)
+
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(task_done_calls, 2)
+        self.assertEqual(server.APP_STORE.list_jobs(user["id"])[0]["status"], "succeeded")
+
 
 class MultipartFormTests(unittest.TestCase):
     def test_repeated_fields_keep_the_first_value_and_file(self):
