@@ -368,19 +368,32 @@ async function setRadioValue(frame, name, value) {
   }
 }
 
-async function verifyBpmPersonIdentity(formFrame, selector, idSelector, personName, fieldLabel) {
+async function verifyBpmPersonIdentity(
+  formFrame,
+  selector,
+  hiddenIdSelectors,
+  personName,
+  fieldLabel,
+) {
+  const requiredIdSelectors = Array.isArray(hiddenIdSelectors) ? hiddenIdSelectors : [hiddenIdSelectors];
   const selectedName = await readInputValue(formFrame, selector);
-  const selectedId = await readInputValue(formFrame, idSelector);
+  const selectedIds = await Promise.all(
+    requiredIdSelectors.map((idSelector) => readInputValue(formFrame, idSelector)),
+  );
   if (selectedName !== personName) {
     throw new Error(`${fieldLabel}选择后姓名不匹配：期望“${personName}”，实际“${selectedName || '空'}”。`);
   }
-  if (!String(selectedId || '').trim()) {
-    throw new Error(`${fieldLabel}选择后缺少隐藏人员 ID。`);
+  const missingSelectors = requiredIdSelectors.filter((_, index) => (
+    !String(selectedIds[index] || '').trim()
+  ));
+  if (missingSelectors.length) {
+    throw new Error(`${fieldLabel}选择后缺少隐藏人员 ID：${missingSelectors.join(', ')}。`);
   }
 }
 
-async function selectBpmPerson(formFrame, selector, idSelector, personName, fieldLabel) {
+async function selectBpmPerson(formFrame, selector, hiddenIdSelectors, personName, fieldLabel) {
   if (!personName) return;
+  const requiredIdSelectors = Array.isArray(hiddenIdSelectors) ? hiddenIdSelectors : [hiddenIdSelectors];
   const field = formFrame.locator(selector).first();
 
   const row = field.locator('xpath=ancestor::tr[1]');
@@ -411,14 +424,22 @@ async function selectBpmPerson(formFrame, selector, idSelector, personName, fiel
   try {
     await personLink.click();
     await formFrame.waitForFunction(
-      ({ fieldSelector, hiddenIdSelector, expected }) => (
+      ({ fieldSelector, requiredSelectors, expected }) => (
         document.querySelector(fieldSelector)?.value === expected
-        && String(document.querySelector(hiddenIdSelector)?.value || '').trim()
+        && requiredSelectors.every((idSelector) => (
+          String(document.querySelector(idSelector)?.value || '').trim()
+        ))
       ),
-      { fieldSelector: selector, hiddenIdSelector: idSelector, expected: personName },
+      { fieldSelector: selector, requiredSelectors: requiredIdSelectors, expected: personName },
       { timeout: 15000 },
     ).catch(() => {});
-    await verifyBpmPersonIdentity(formFrame, selector, idSelector, personName, fieldLabel);
+    await verifyBpmPersonIdentity(
+      formFrame,
+      selector,
+      requiredIdSelectors,
+      personName,
+      fieldLabel,
+    );
   } finally {
     await picker.close().catch(() => {});
   }
@@ -427,22 +448,28 @@ async function selectBpmPerson(formFrame, selector, idSelector, personName, fiel
 async function ensureBpmPersonIdentity(
   formFrame,
   selector,
-  idSelector,
+  hiddenIdSelectors,
   personName,
   fieldLabel,
   selectPerson = selectBpmPerson,
 ) {
+  const requiredIdSelectors = Array.isArray(hiddenIdSelectors) ? hiddenIdSelectors : [hiddenIdSelectors];
   const currentName = await readInputValue(formFrame, selector);
-  const currentId = await readInputValue(formFrame, idSelector);
-  if (currentName === personName && String(currentId || '').trim()) return;
-  await selectPerson(formFrame, selector, idSelector, personName, fieldLabel);
+  const currentIds = await Promise.all(
+    requiredIdSelectors.map((idSelector) => readInputValue(formFrame, idSelector)),
+  );
+  if (
+    currentName === personName
+    && currentIds.every((currentId) => String(currentId || '').trim())
+  ) return;
+  await selectPerson(formFrame, selector, requiredIdSelectors, personName, fieldLabel);
 }
 
 async function ensureEditorIdentity(formFrame, topic, selectPerson = selectBpmPerson) {
   await ensureBpmPersonIdentity(
     formFrame,
     'input[name="PRJEDITOR"]',
-    'input[name="PRJEDITORNO"]',
+    ['input[name="PRJEDITORNO"]', 'input[name="PRJEDITORUID"]'],
     topic.projectEditor,
     '策划编辑',
     selectPerson,
@@ -450,7 +477,7 @@ async function ensureEditorIdentity(formFrame, topic, selectPerson = selectBpmPe
   await ensureBpmPersonIdentity(
     formFrame,
     'input[name="EDITOR"]',
-    'input[name="EDITORNO"]',
+    ['input[name="EDITORNO"]', 'input[name="EDITORUID"]'],
     topic.editor,
     '拟责任编辑',
     selectPerson,

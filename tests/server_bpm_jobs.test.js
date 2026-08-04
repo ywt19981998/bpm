@@ -4,6 +4,14 @@ const path = require('node:path');
 const test = require('node:test');
 
 const source = fs.readFileSync(path.join(__dirname, '..', 'server.py'), 'utf8');
+const inputSchema = fs.readFileSync(path.join(
+  __dirname,
+  '..',
+  'skills',
+  'phei-bpm-topic-declaration',
+  'references',
+  'input-schema.md',
+), 'utf8');
 
 function functionBody(name) {
   const start = source.indexOf(`def ${name}(`);
@@ -41,4 +49,11 @@ test('server does not synthesize BPM person identifiers from display names', () 
   assert.doesNotMatch(source, /["']yewt["']/);
   assert.doesNotMatch(source, /def editor_identity\(/);
   assert.doesNotMatch(source, /authorMaintenance"\]\["contactorUid"\]/);
+});
+
+test('input schema assigns editor names to the login user and IDs to BPM', () => {
+  assert.doesNotMatch(inputSchema, /yewt|2024070801/);
+  assert.doesNotMatch(inputSchema, /projectEditorNo[\s\S]{0,200}stable defaults/i);
+  assert.match(inputSchema, /projectEditor[\s\S]*editor[\s\S]*登录用户/);
+  assert.match(inputSchema, /NO[\s\S]*UID[\s\S]*(?:BPM 页面|人员选择器)/);
 });

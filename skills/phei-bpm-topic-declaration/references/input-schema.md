@@ -43,7 +43,7 @@ Normalize the user's material into a JSON object like this:
     "publications": "从申报表主要著作出版情况字段读取；缺失填全角空格",
     "bio": "必填。优先从申报表作者简介读取；缺失时用公开学校/学院官网信息生成50-1000字简介"
   },
-  "editorName": "叶文涛",
+  "editorName": "由服务端从当前登录用户的 displayName 注入",
   "brief": "内容简介",
   "reader": "读者对象",
   "feature": "选题特色",
@@ -81,12 +81,12 @@ Normalize the user's material into a JSON object like this:
   "firstNum": "1200",
   "project": "无",
   "scriptClassify": "普通选题",
-  "projectEditor": "叶文涛",
-  "projectEditorNo": "2024070801",
-  "projectEditorUid": "yewt",
-  "editor": "叶文涛",
-  "editorNo": "2024070801",
-  "editorUid": "yewt",
+  "projectEditor": "当前登录用户姓名",
+  "projectEditorNo": "",
+  "projectEditorUid": "",
+  "editor": "当前登录用户姓名",
+  "editorNo": "",
+  "editorUid": "",
   "projectDept": "高等教育出版分社/高等信息科技事业部",
   "editorDept": "高等教育出版分社/高等信息科技事业部",
   "isCost": "1",
@@ -179,15 +179,13 @@ Normalize the user's material into a JSON object like this:
 
 - Author fields now come from the uploaded application form. Do not reuse old hardcoded author defaults; leave `authorCode` and `authorId` blank unless a later author-library lookup supplies them.
 - For `authorMaintenance`, submit extracted author information directly to BPM. Only `bio`/作者简介 requires real content. If the application form lacks 作者简介, use the configured model/search workflow to summarize public school or department official-page information. For every other missing author-maintenance field, use a single full-width space `　` so the BPM form can be saved.
-- `editorName` comes from the web app BPM login panel and should be used for both `projectEditor` and `editor` unless those fields are explicitly supplied.
+- `editorName` is injected by the server from the authenticated web user's display name. Use that login-user name for both `projectEditor` and `editor`; do not accept a client-supplied editor identity.
 - BPM declaration classification locks the top-level fields: `class1` is 教育 (`02`), `class2` is 本科研究生 (`0201`), `gbClass` is `G`, and `readLevel` is 高等理工. Infer only `class3` and `class4` from the title, subject, generated report content, or model-provided classification suggestion.
 - `feature` and `compare` should come from dedicated generation fields when available: `bpmFields.feature` and `bpmFields.compare`. `feature` should be structured around 内容范围、写作特点、实践教学、教学资源建设、其他特点; `compare` should summarize same-type titles/materials without inventing precise sales or ranking data.
 - The topic score table should use the generated report scores: content, author, feasibility, award, profit, marketing, and total.
 - Cost estimation values are fixed to the `costDefaults` block above until the user gives a new cost policy. In the cost-estimation subform, do not fill the hidden/auto `CHARNUM` copyright-word field; only fill the marked cost fields such as pricing, prepress, printing, paper, sales, discount, storage/transport, and management-fee fields.
-- For this workflow, several selector-backed operational fields are stable defaults:
-  - `projectEditor`, `projectEditorNo`, `projectEditorUid`
-  - `editor`, `editorNo`, `editorUid`
-  - `projectDept`, `editorDept`
-- If the user only provides proposal content, keep the stable operational defaults above unless they explicitly want different metadata.
+- `projectEditor` and `editor` names come from the current login user. Their complete hidden identities require both the corresponding `NO` and `UID` fields; these IDs must be provided by existing values on the BPM 页面 or by the BPM 人员选择器.
+- Leave `projectEditorNo`, `projectEditorUid`, `editorNo`, and `editorUid` empty in input data. These IDs are owned by BPM; never derive them from a display name or treat them as defaults.
+- `projectDept` and `editorDept` remain workflow metadata defaults until department handling is separately changed.
 - Dates must use `YYYY-MM-DD`.
 - Numeric fields should still be passed as strings because the form expects text input.

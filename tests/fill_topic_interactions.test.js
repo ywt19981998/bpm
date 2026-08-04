@@ -75,15 +75,22 @@ test('editor identity preserves BPM values or uses the person picker before save
   const pickerBody = functionBody('selectBpmPerson');
   const fillBody = functionBody('fillForm');
   const saveBody = functionBody('submitTopic');
-  for (const field of ['PRJEDITOR', 'PRJEDITORNO', 'EDITOR', 'EDITORNO']) {
+  for (const field of [
+    'PRJEDITOR',
+    'PRJEDITORNO',
+    'PRJEDITORUID',
+    'EDITOR',
+    'EDITORNO',
+    'EDITORUID',
+  ]) {
     assert.match(identityBody, new RegExp(`input\\[name=["']${field}["']\\]`));
   }
   assert.match(identityBody, /ensureBpmPersonIdentity\([\s\S]*topic\.projectEditor[\s\S]*'策划编辑'/);
   assert.match(identityBody, /ensureBpmPersonIdentity\([\s\S]*topic\.editor[\s\S]*'拟责任编辑'/);
   assert.ok(ensurePersonBody.indexOf('readInputValue(formFrame, selector)') < ensurePersonBody.indexOf('selectPerson('));
-  assert.ok(ensurePersonBody.indexOf('readInputValue(formFrame, idSelector)') < ensurePersonBody.indexOf('selectPerson('));
+  assert.match(ensurePersonBody, /hiddenIdSelectors[\s\S]*readInputValue/);
   assert.doesNotMatch(pickerBody, /field\.inputValue\(\).*personName/);
-  assert.match(pickerBody, /verifyBpmPersonIdentity\(formFrame,\s*selector,\s*idSelector/);
+  assert.match(pickerBody, /verifyBpmPersonIdentity\([\s\S]*formFrame,[\s\S]*selector,[\s\S]*requiredIdSelectors/);
   assert.match(fillBody, /ensureEditorIdentity\(formFrame,\s*topic\)/);
   assert.ok(saveBody.indexOf('fillForm(formFrame, topic)') < saveBody.indexOf('clickWorkflowSaveAndWait'));
   assert.doesNotMatch(fillBody, /setReadonlyInputValue\(formFrame,\s*'input\[name="(?:PRJEDITORNO|PRJEDITORUID|EDITORNO|EDITORUID)"\]'/);
@@ -96,12 +103,14 @@ test('editor identity selects only the invalid field', async () => {
       values: {
         'input[name="PRJEDITOR"]': '张编辑',
         'input[name="PRJEDITORNO"]': 'P1001',
+        'input[name="PRJEDITORUID"]': 'zhang-editor',
         'input[name="EDITOR"]': '旧编辑',
         'input[name="EDITORNO"]': '',
+        'input[name="EDITORUID"]': '',
       },
       expectedCalls: [[
         'input[name="EDITOR"]',
-        'input[name="EDITORNO"]',
+        ['input[name="EDITORNO"]', 'input[name="EDITORUID"]'],
         '张编辑',
         '拟责任编辑',
       ]],
@@ -110,12 +119,14 @@ test('editor identity selects only the invalid field', async () => {
       values: {
         'input[name="PRJEDITOR"]': '旧编辑',
         'input[name="PRJEDITORNO"]': '',
+        'input[name="PRJEDITORUID"]': '',
         'input[name="EDITOR"]': '张编辑',
         'input[name="EDITORNO"]': 'E1001',
+        'input[name="EDITORUID"]': 'zhang-editor',
       },
       expectedCalls: [[
         'input[name="PRJEDITOR"]',
-        'input[name="PRJEDITORNO"]',
+        ['input[name="PRJEDITORNO"]', 'input[name="PRJEDITORUID"]'],
         '张编辑',
         '策划编辑',
       ]],
@@ -124,10 +135,28 @@ test('editor identity selects only the invalid field', async () => {
       values: {
         'input[name="PRJEDITOR"]': '张编辑',
         'input[name="PRJEDITORNO"]': 'P1001',
+        'input[name="PRJEDITORUID"]': 'zhang-editor',
         'input[name="EDITOR"]': '张编辑',
         'input[name="EDITORNO"]': 'E1001',
+        'input[name="EDITORUID"]': 'zhang-editor',
       },
       expectedCalls: [],
+    },
+    {
+      values: {
+        'input[name="PRJEDITOR"]': '张编辑',
+        'input[name="PRJEDITORNO"]': 'P1001',
+        'input[name="PRJEDITORUID"]': '',
+        'input[name="EDITOR"]': '张编辑',
+        'input[name="EDITORNO"]': 'E1001',
+        'input[name="EDITORUID"]': 'zhang-editor',
+      },
+      expectedCalls: [[
+        'input[name="PRJEDITOR"]',
+        ['input[name="PRJEDITORNO"]', 'input[name="PRJEDITORUID"]'],
+        '张编辑',
+        '策划编辑',
+      ]],
     },
   ];
 
@@ -144,14 +173,15 @@ test('editor identity selects only the invalid field', async () => {
 
 test('person picker fails when BPM does not populate the hidden person ID', async () => {
   const nameSelector = 'input[name="EDITOR"]';
-  const idSelector = 'input[name="EDITORNO"]';
+  const hiddenIdSelectors = ['input[name="EDITORNO"]', 'input[name="EDITORUID"]'];
   const formFrame = fakePickerFrame({
     [nameSelector]: '张编辑',
-    [idSelector]: '',
+    [hiddenIdSelectors[0]]: 'E1001',
+    [hiddenIdSelectors[1]]: '',
   });
 
   await assert.rejects(
-    selectBpmPerson(formFrame, nameSelector, idSelector, '张编辑', '拟责任编辑'),
+    selectBpmPerson(formFrame, nameSelector, hiddenIdSelectors, '张编辑', '拟责任编辑'),
     /拟责任编辑.*隐藏人员 ID/,
   );
 });
