@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>选题策划报告工作台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23d9f0ed'/%3E%3Cpath d='M10 7h9l4 4v14H10z' fill='none' stroke='%230f766e' stroke-width='2'/%3E%3Cpath d='M19 7v5h5M13 16h7M13 20h7' stroke='%230f766e' stroke-width='2'/%3E%3C/svg%3E">
+  <script src="auth_session_generation.js"></script>
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
   <style>
     :root {
@@ -1461,6 +1462,7 @@
     const loginError = document.getElementById("loginError");
     const registerError = document.getElementById("registerError");
     const currentUserName = document.getElementById("currentUserName");
+    const authSession = new AuthSessionGeneration();
 
     sections.forEach((section) => {
       section.text = "";
@@ -1474,6 +1476,20 @@
       element.hidden = !message;
     }
 
+    function captureSession() {
+      return authSession.capture();
+    }
+
+    function isCurrentSession(snapshot) {
+      return authSession.isCurrent(snapshot)
+        && (snapshot.userId === null ? currentUser === null : currentUser?.id === snapshot.userId);
+    }
+
+    function beginSessionRestore() {
+      authSession.clear();
+      return captureSession();
+    }
+
     function draftStorageKey(user) {
       return `phei-report-draft-v3:${user.id}`;
     }
@@ -1483,6 +1499,7 @@
     }
 
     function clearWorkspaceState() {
+      clearInterval(progressTimer);
       activeIndex = 0;
       uploadedFile = null;
       quickApplicationFile = null;
@@ -1510,6 +1527,13 @@
       document.getElementById("bpmPassword").value = "";
       document.getElementById("bpmEditorName").value = document.getElementById("bpmEditorName").defaultValue;
       document.getElementById("bpmStatus").textContent = "请选择新增作译者或填报选题；选题只暂存草稿，不办理提交。";
+      progressPanel.hidden = true;
+      progressBar.style.width = "0%";
+      bpmProgressPanel.hidden = true;
+      bpmProgressBar.style.width = "0%";
+      ["importBpmSources", "generateAll", "queueBpm", "queueAuthor", "logoutButton"].forEach((id) => {
+        document.getElementById(id).disabled = false;
+      });
       reportView.hidden = false;
       bpmView.hidden = true;
       document.getElementById("menuReport").classList.add("active");
@@ -1549,6 +1573,7 @@
     }
 
     function showAuthView(mode = "login") {
+      authSession.clear();
       clearWorkspaceState();
       currentUser = null;
       currentUserName.textContent = "";
@@ -1565,6 +1590,7 @@
     }
 
     function showWorkspace(user) {
+      authSession.activate(user);
       clearWorkspaceState();
       currentUser = user;
       loadUserDraft(user);
@@ -1578,8 +1604,9 @@
     }
 
     async function apiFetch(url, options = {}) {
-      const response = await fetch(url, options);
-      if (response.status === 401 && !options.skipAuthRedirect) {
+      const { session = captureSession(), skipAuthRedirect = false, ...fetchOptions } = options;
+      const response = await fetch(url, fetchOptions);
+      if (response.status === 401 && !skipAuthRedirect && isCurrentSession(session)) {
         showAuthView("login");
         throw new Error("登录已过期，请重新登录");
       }
@@ -1595,19 +1622,26 @@
       }
     }
 
-    async function loadCurrentUser() {
+    async function loadCurrentUser(session = beginSessionRestore()) {
       try {
-        const response = await apiFetch("/api/auth/me", { cache: "no-store" });
-        if (!response.ok) throw new Error(await responseError(response, "无法恢复登录状态"));
+        const response = await apiFetch("/api/auth/me", { cache: "no-store", session });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) {
+          const message = await responseError(response, "无法恢复登录状态");
+          if (!isCurrentSession(session)) return;
+          throw new Error(message);
+        }
         const data = await response.json();
+        if (!isCurrentSession(session)) return;
         if (!data.user) throw new Error("无法恢复登录状态");
         showWorkspace(data.user);
       } catch (error) {
-        showAuthView("login");
+        if (isCurrentSession(session)) showAuthView("login");
       }
     }
 
     async function submitAuthForm(form, errorElement, endpoint, payload) {
+      const session = authSession.clear();
       const button = form.querySelector('button[type="submit"]');
       button.disabled = true;
       setAuthError(errorElement);
@@ -1616,13 +1650,18 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
-          skipAuthRedirect: true
+          skipAuthRedirect: true,
+          session
         });
+        if (!isCurrentSession(session)) return;
         if (!response.ok) {
-          setAuthError(errorElement, await responseError(response, "账户操作失败，请稍后重试"));
+          const message = await responseError(response, "账户操作失败，请稍后重试");
+          if (!isCurrentSession(session)) return;
+          setAuthError(errorElement, message);
           return;
         }
         const data = await response.json();
+        if (!isCurrentSession(session)) return;
         if (!data.user) {
           setAuthError(errorElement, "账户操作失败，请稍后重试");
           return;
@@ -1630,9 +1669,9 @@
         form.reset();
         showWorkspace(data.user);
       } catch (error) {
-        setAuthError(errorElement, "无法连接服务，请稍后重试");
+        if (isCurrentSession(session)) setAuthError(errorElement, "无法连接服务，请稍后重试");
       } finally {
-        button.disabled = false;
+        if (isCurrentSession(session)) button.disabled = false;
       }
     }
 
@@ -1642,67 +1681,83 @@
       window.setTimeout(() => toast.classList.remove("show"), 1400);
     }
 
-    function setProgress(value, message) {
+    function setProgress(value, message, session = captureSession()) {
+      if (!isCurrentSession(session)) return false;
       progressPanel.hidden = false;
       progressBar.style.width = `${value}%`;
       progressPercent.textContent = `${value}%`;
       if (message) progressText.textContent = message;
+      return true;
     }
 
-    function startProgress() {
+    function startProgress(session = captureSession()) {
       let value = 8;
-      setProgress(value, "正在上传并解析申报表...");
+      setProgress(value, "正在上传并解析申报表...", session);
       clearInterval(progressTimer);
       progressTimer = setInterval(() => {
+        if (!isCurrentSession(session)) {
+          clearInterval(progressTimer);
+          return;
+        }
         value = Math.min(88, value + Math.ceil(Math.random() * 7));
         const message = value < 35
           ? "正在读取 Word 表格字段..."
           : value < 65
             ? "正在按 skill 组织提示词..."
             : "模型正在生成一到六部分和评分...";
-        setProgress(value, message);
+        setProgress(value, message, session);
       }, 650);
     }
 
-    function finishProgress(message) {
+    function finishProgress(message, session = captureSession()) {
+      if (!isCurrentSession(session)) return;
       clearInterval(progressTimer);
-      setProgress(100, message || "生成完成");
+      setProgress(100, message || "生成完成", session);
       window.setTimeout(() => {
+        if (!isCurrentSession(session)) return;
         progressPanel.hidden = true;
         progressBar.style.width = "0%";
       }, 900);
     }
 
-    function failProgress(message) {
+    function failProgress(message, session = captureSession()) {
+      if (!isCurrentSession(session)) return;
       clearInterval(progressTimer);
-      setProgress(100, message || "生成失败");
+      setProgress(100, message || "生成失败", session);
       progressBar.style.background = "var(--red)";
       window.setTimeout(() => {
+        if (!isCurrentSession(session)) return;
         progressPanel.hidden = true;
         progressBar.style.width = "0%";
         progressBar.style.background = "var(--teal)";
       }, 1800);
     }
 
-    function setBpmProgress(value, message) {
+    function setBpmProgress(value, message, session = captureSession()) {
+      if (!isCurrentSession(session)) return false;
       bpmProgressPanel.hidden = false;
       bpmProgressBar.style.width = `${value}%`;
       bpmProgressPercent.textContent = `${value}%`;
       if (message) bpmProgressText.textContent = message;
+      return true;
     }
 
-    function finishBpmProgress(message) {
-      setBpmProgress(100, message || "已加入队列");
+    function finishBpmProgress(message, session = captureSession()) {
+      if (!isCurrentSession(session)) return;
+      setBpmProgress(100, message || "已加入队列", session);
       window.setTimeout(() => {
+        if (!isCurrentSession(session)) return;
         bpmProgressPanel.hidden = true;
         bpmProgressBar.style.width = "0%";
       }, 900);
     }
 
-    function failBpmProgress(message) {
-      setBpmProgress(100, message || "加入队列失败");
+    function failBpmProgress(message, session = captureSession()) {
+      if (!isCurrentSession(session)) return;
+      setBpmProgress(100, message || "加入队列失败", session);
       bpmProgressBar.style.background = "var(--red)";
       window.setTimeout(() => {
+        if (!isCurrentSession(session)) return;
         bpmProgressPanel.hidden = true;
         bpmProgressBar.style.width = "0%";
         bpmProgressBar.style.background = "var(--teal)";
@@ -2037,11 +2092,17 @@
       return "";
     }
 
-    async function refreshBpmJobs() {
+    async function refreshBpmJobs(session = captureSession()) {
       try {
-        const response = await apiFetch("/api/bpm-jobs");
-        if (!response.ok) throw new Error(await response.text());
+        const response = await apiFetch("/api/bpm-jobs", { session });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) {
+          const message = await response.text();
+          if (!isCurrentSession(session)) return;
+          throw new Error(message);
+        }
         const data = await response.json();
+        if (!isCurrentSession(session)) return;
         const jobs = data.jobs || [];
         if (!jobs.length) {
           bpmJobs.replaceChildren(createEmptyState("暂无 BPM 任务"));
@@ -2074,6 +2135,7 @@
         bpmJobs.replaceChildren(...cards);
         if (window.lucide) window.lucide.createIcons();
       } catch (error) {
+        if (!isCurrentSession(session)) return;
         bpmJobs.replaceChildren(createEmptyState(error.message || "任务日志读取失败"));
       }
     }
@@ -2085,16 +2147,24 @@
       }).join("\n\n");
     }
 
-    async function assertBackendReady() {
+    async function assertBackendReady(session = captureSession()) {
       try {
-        const response = await apiFetch("/api/health", { cache: "no-store" });
-        if (!response.ok) throw new Error(await response.text());
+        const response = await apiFetch("/api/health", { cache: "no-store", session });
+        if (!isCurrentSession(session)) return false;
+        if (!response.ok) {
+          const message = await response.text();
+          if (!isCurrentSession(session)) return false;
+          throw new Error(message);
+        }
+        return true;
       } catch (error) {
+        if (!isCurrentSession(session)) return false;
         throw new Error(`后端连接失败：${location.origin || "当前页面"}，请确认网站服务窗口没有关闭，并使用 http://10.10.35.19:4174/index.html 打开。`);
       }
     }
 
-    function applyGeneratedData(data, options = {}) {
+    function applyGeneratedData(data, options = {}, session = captureSession()) {
+      if (!isCurrentSession(session)) return false;
       const { markConfirmed = false, meta = "已生成策划报告草稿" } = options;
       docxExported = false;
       if (data.title) {
@@ -2126,6 +2196,7 @@
       renderPending(data.pending_questions || []);
       scoreRows.replaceChildren();
       render();
+      return true;
     }
 
     document.querySelectorAll("[data-auth-mode]").forEach((button) => {
@@ -2162,16 +2233,23 @@
     document.getElementById("logoutButton").addEventListener("click", async () => {
       const button = document.getElementById("logoutButton");
       button.disabled = true;
+      showAuthView("login");
+      const session = captureSession();
       let errorMessage = "";
       try {
-        const response = await apiFetch("/api/auth/logout", { method: "POST", skipAuthRedirect: true });
-        if (!response.ok) errorMessage = await responseError(response, "退出登录失败，请重新登录");
+        const response = await apiFetch("/api/auth/logout", { method: "POST", skipAuthRedirect: true, session });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) {
+          errorMessage = await responseError(response, "退出登录失败，请重新登录");
+          if (!isCurrentSession(session)) return;
+        }
       } catch (error) {
-        errorMessage = "退出登录失败，请重新登录";
+        if (isCurrentSession(session)) errorMessage = "退出登录失败，请重新登录";
       } finally {
-        showAuthView("login");
-        setAuthError(loginError, errorMessage);
-        button.disabled = false;
+        if (isCurrentSession(session)) {
+          setAuthError(loginError, errorMessage);
+          button.disabled = false;
+        }
       }
     });
 
@@ -2247,33 +2325,44 @@
         showToast("请先选择申报表和策划报告");
         return;
       }
+      const session = captureSession();
+      const applicationFile = quickApplicationFile;
+      const reportFile = quickReportFile;
       const button = document.getElementById("importBpmSources");
       button.disabled = true;
-      setProgress(20, "正在读取申报表和策划报告...");
+      setProgress(20, "正在读取申报表和策划报告...", session);
       try {
-        await assertBackendReady();
+        if (!(await assertBackendReady(session)) || !isCurrentSession(session)) return;
         const form = new FormData();
-        form.append("application", quickApplicationFile);
-        form.append("report", quickReportFile);
+        form.append("application", applicationFile);
+        form.append("report", reportFile);
         const response = await apiFetch("/api/import-bpm-sources", {
           method: "POST",
-          body: form
+          body: form,
+          session
         });
-        if (!response.ok) throw new Error(await response.text());
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) {
+          const message = await response.text();
+          if (!isCurrentSession(session)) return;
+          throw new Error(message);
+        }
         const data = await response.json();
-        applyGeneratedData(data, { markConfirmed: true, meta: "已导入策划报告 · 可直接测试 BPM" });
-        document.getElementById("fileName").textContent = quickApplicationFile.name;
+        if (!isCurrentSession(session)) return;
+        if (!applyGeneratedData(data, { markConfirmed: true, meta: "已导入策划报告 · 可直接测试 BPM" }, session)) return;
+        document.getElementById("fileName").textContent = applicationFile.name;
         document.getElementById("fileState").textContent = "已合并申报表和策划报告";
-        finishProgress("导入完成");
+        finishProgress("导入完成", session);
         switchMainView("bpm");
         showToast("已准备 BPM 填报数据");
       } catch (error) {
+        if (!isCurrentSession(session)) return;
         console.error(error);
-        failProgress("导入失败");
+        failProgress("导入失败", session);
         progressText.textContent = error.message || "导入失败";
         showToast((error.message || "导入失败").slice(0, 120));
       } finally {
-        button.disabled = false;
+        if (isCurrentSession(session)) button.disabled = false;
       }
     });
 
@@ -2321,13 +2410,15 @@
         showToast("请先上传选题申报表");
         return;
       }
+      const session = captureSession();
+      const file = uploadedFile;
       const button = document.getElementById("generateAll");
       button.disabled = true;
-      startProgress();
+      startProgress(session);
       try {
-        await assertBackendReady();
+        if (!(await assertBackendReady(session)) || !isCurrentSession(session)) return;
         const form = new FormData();
-        form.append("file", uploadedFile);
+        form.append("file", file);
         form.append("modelUrl", document.getElementById("modelUrl").value || "https://api.deepseek.com");
         form.append("model", document.getElementById("modelName").value || "deepseek-v4-flash");
         const apiKey = document.getElementById("apiKey").value;
@@ -2335,56 +2426,37 @@
 
         const response = await apiFetch("/api/generate-report", {
           method: "POST",
-          body: form
+          body: form,
+          session
         });
-        if (!response.ok) throw new Error(await response.text());
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) {
+          const message = await response.text();
+          if (!isCurrentSession(session)) return;
+          throw new Error(message);
+        }
         const data = await response.json();
-        docxExported = false;
-        if (data.title) {
-          document.getElementById("projectName").textContent = data.title;
-        }
-        document.getElementById("projectMeta").textContent = "已生成策划报告草稿";
-        if (Array.isArray(data.sections)) {
-          data.sections.forEach((incoming) => {
-            const target = sections.find((section) => section.key === incoming.key);
-            if (!target) return;
-            target.text = ensureTwoSpaceIndent(incoming.text || "");
-            target.confirmed = false;
-          });
-        }
-        if (Array.isArray(data.scores)) {
-          data.scores.forEach((incoming) => {
-            const target = scoreItems.find((item) => item[0] === incoming[0]);
-            if (!target) return;
-            target[2] = Number(incoming[2] || 0);
-          });
-        }
-        bpmTopic = data.bpmTopic || null;
-        if (bpmTopic && data.bpmFields) {
-          bpmTopic.feature = data.bpmFields.feature || bpmTopic.feature;
-          bpmTopic.compare = data.bpmFields.compare || bpmTopic.compare;
-        }
-        renderAuthorStatus(bpmTopic ? bpmTopic.authorMaintenance : null);
-        renderBpmPreview();
+        if (!isCurrentSession(session)) return;
+        if (!applyGeneratedData(data, { meta: "已生成策划报告草稿" }, session)) return;
         document.getElementById("fileState").textContent = "已生成草稿 · 等待人工确认";
-        renderPending(data.pending_questions || []);
-        scoreRows.replaceChildren();
-        render();
-        finishProgress("生成完成");
+        finishProgress("生成完成", session);
         showToast("已生成全部段落");
       } catch (error) {
+        if (!isCurrentSession(session)) return;
         console.error(error);
-        failProgress("生成失败");
+        failProgress("生成失败", session);
         progressText.textContent = error.message || "生成失败";
         showToast((error.message || "生成失败").slice(0, 120));
       } finally {
-        button.disabled = false;
+        if (isCurrentSession(session)) button.disabled = false;
       }
     });
 
     document.getElementById("saveDraft").addEventListener("click", () => {
-      if (!currentUser) return;
+      const session = captureSession();
+      if (!currentUser || !isCurrentSession(session)) return;
       saveActiveText();
+      if (!isCurrentSession(session)) return;
       localStorage.setItem(draftStorageKey(currentUser), JSON.stringify({ sections, scoreItems, bpmTopic, authorMaintenance }));
       showToast("草稿已保存");
     });
@@ -2404,6 +2476,8 @@
     });
 
     document.getElementById("exportDocx").addEventListener("click", async () => {
+      const session = captureSession();
+      if (!isCurrentSession(session)) return;
       saveActiveText();
       const unconfirmed = sections.filter((section) => !section.confirmed);
       if (unconfirmed.length) {
@@ -2421,10 +2495,17 @@
         const response = await apiFetch("/api/export-docx", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
+          session
         });
-        if (!response.ok) throw new Error(await response.text());
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) {
+          const message = await response.text();
+          if (!isCurrentSession(session)) return;
+          throw new Error(message);
+        }
         const blob = await response.blob();
+        if (!isCurrentSession(session)) return;
         const url = URL.createObjectURL(blob);
 	        const a = document.createElement("a");
 	        a.href = url;
@@ -2437,12 +2518,15 @@
         updateWorkflowByState(true);
         showToast("DOCX 已生成");
       } catch (error) {
+        if (!isCurrentSession(session)) return;
         console.error(error);
         showToast("导出需要启动本地后端服务");
       }
     });
 
     document.getElementById("queueBpm").addEventListener("click", async () => {
+      const session = captureSession();
+      if (!isCurrentSession(session)) return;
       saveActiveText();
       renderBpmPreview();
       const unconfirmed = sections.filter((section) => !section.confirmed);
@@ -2460,32 +2544,43 @@
 
       const button = document.getElementById("queueBpm");
       button.disabled = true;
-      setBpmProgress(40, "正在加入选题填报队列...");
+      setBpmProgress(40, "正在加入选题填报队列...", session);
       try {
         const response = await apiFetch("/api/bpm-topic-jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
+          session
         });
-        if (!response.ok) throw new Error(await response.text());
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) {
+          const message = await response.text();
+          if (!isCurrentSession(session)) return;
+          throw new Error(message);
+        }
         const result = await response.json();
-        finishBpmProgress("选题填报已加入队列");
+        if (!isCurrentSession(session)) return;
+        finishBpmProgress("选题填报已加入队列", session);
         bpmStatus.textContent = `选题填报已加入队列：${result.title || title}`;
         document.getElementById("fileState").textContent = "选题填报已加入队列";
         document.getElementById("bpmPassword").value = "";
-        await refreshBpmJobs();
+        await refreshBpmJobs(session);
+        if (!isCurrentSession(session)) return;
         showToast("选题填报已加入队列");
       } catch (error) {
+        if (!isCurrentSession(session)) return;
         console.error(error);
-        failBpmProgress("选题填报加入队列失败");
+        failBpmProgress("选题填报加入队列失败", session);
         bpmStatus.textContent = error.message.slice(0, 80) || "选题填报加入队列失败";
         showToast("选题填报加入队列失败");
       } finally {
-        button.disabled = false;
+        if (isCurrentSession(session)) button.disabled = false;
       }
     });
 
     document.getElementById("queueAuthor").addEventListener("click", async () => {
+      const session = captureSession();
+      if (!isCurrentSession(session)) return;
       saveActiveText();
       const payload = currentBpmPayload();
       if (!hasBpmCredentials(payload.bpm)) {
@@ -2507,27 +2602,36 @@
 
       const button = document.getElementById("queueAuthor");
       button.disabled = true;
-      setBpmProgress(40, "正在加入作译者维护队列...");
+      setBpmProgress(40, "正在加入作译者维护队列...", session);
       try {
         const response = await apiFetch("/api/bpm-author-jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
+          body: JSON.stringify(payload),
+          session
         });
-        if (!response.ok) throw new Error(await response.text());
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) {
+          const message = await response.text();
+          if (!isCurrentSession(session)) return;
+          throw new Error(message);
+        }
         const result = await response.json();
-        finishBpmProgress("作译者维护已加入队列");
+        if (!isCurrentSession(session)) return;
+        finishBpmProgress("作译者维护已加入队列", session);
         bpmStatus.textContent = `作译者维护已加入队列：${result.title || authorName}`;
         document.getElementById("bpmPassword").value = "";
-        await refreshBpmJobs();
+        await refreshBpmJobs(session);
+        if (!isCurrentSession(session)) return;
         showToast("作译者维护已加入队列");
       } catch (error) {
+        if (!isCurrentSession(session)) return;
         console.error(error);
-        failBpmProgress("作译者维护加入队列失败");
+        failBpmProgress("作译者维护加入队列失败", session);
         bpmStatus.textContent = error.message.slice(0, 80) || "作译者维护加入队列失败";
         showToast("作译者维护加入队列失败");
       } finally {
-        button.disabled = false;
+        if (isCurrentSession(session)) button.disabled = false;
       }
     });
 

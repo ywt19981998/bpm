@@ -37,7 +37,7 @@ test("authenticated navigation exposes the current name and icon-only logout con
 });
 
 test("auth state is restored before the workspace is shown", () => {
-  assert.match(source, /async function loadCurrentUser\(\)/);
+  assert.match(source, /async function loadCurrentUser\(/);
   assert.match(source, /await apiFetch\("\/api\/auth\/me"/);
   assert.match(source, /showWorkspace\(data\.user\)/);
   assert.match(source, /showAuthView\("login"\)/);
@@ -67,4 +67,21 @@ test("untrusted report and job values are rendered as text instead of HTML", () 
   assert.match(source, /valueNode\.textContent = String\(value \|\| "未填写"\)/);
   assert.match(source, /jobTitle\.textContent = job\.title \|\| "未命名选题"/);
   assert.match(source, /jobLog\.textContent = logs/);
+});
+
+test("async workspace operations capture and verify the active session generation", () => {
+  assert.match(source, /src="auth_session_generation\.js"/);
+  assert.match(source, /const authSession = new AuthSessionGeneration\(\)/);
+  assert.match(source, /function captureSession\(\)/);
+  assert.match(source, /function isCurrentSession\(snapshot\)/);
+  assert.match(source, /function showAuthView\([^)]*\)[\s\S]*authSession\.clear\(\)/);
+  assert.match(source, /function showWorkspace\(user\)[\s\S]*authSession\.activate\(user\)/);
+  assert.match(source, /async function loadCurrentUser\(session = beginSessionRestore\(\)\)/);
+  assert.match(source, /async function refreshBpmJobs\(session = captureSession\(\)\)/);
+  assert.match(source, /const session = captureSession\(\);[\s\S]*await assertBackendReady\(session\)/);
+  assert.match(source, /if \(!isCurrentSession\(session\)\) return;/);
+  ["/api/import-bpm-sources", "/api/generate-report", "/api/export-docx", "/api/bpm-topic-jobs", "/api/bpm-author-jobs"].forEach((endpoint) => {
+    const escaped = endpoint.replaceAll("/", "\\/");
+    assert.match(source, new RegExp(`apiFetch\\("${escaped}",[\\s\\S]*?session`));
+  });
 });
