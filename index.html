@@ -1074,6 +1074,7 @@
           <span class="current-user-label">当前用户</span>
           <span class="current-user-name" id="currentUserName"></span>
         </div>
+        <button class="icon-button" id="bpmSettingsButton" type="button" aria-label="BPM 配置" title="BPM 配置"><i data-lucide="key-round" size="16"></i></button>
         <button class="icon-button" id="logoutButton" type="button" aria-label="退出登录" title="退出登录"><i data-lucide="log-out" size="16"></i></button>
       </div>
 
@@ -1255,24 +1256,22 @@
 
         <aside class="bpm-stack">
           <section class="panel">
-            <h3 class="panel-title"><i data-lucide="key-round" size="16"></i>BPM 登录</h3>
+            <h3 class="panel-title"><i data-lucide="key-round" size="16"></i>BPM 配置</h3>
             <div class="model-form">
+              <div class="file-state">BPM 地址由系统统一配置。</div>
+              <div class="file-state" id="bpmCredentialAccount">尚未配置 BPM 账号</div>
               <label>
-                <span>BPM 地址</span>
-                <input id="bpmUrl" type="url" value="http://bpm.phei.com.cn:8088/portal/r/w">
+                <span>账号</span>
+                <input id="bpmUser" type="text" autocomplete="username" placeholder="输入 BPM 账号">
               </label>
-	              <label>
-	                <span>账号</span>
-	                <input id="bpmUser" type="text" placeholder="输入自己的 BPM 账号">
-	              </label>
-	              <label>
-	                <span>姓名</span>
-	                <input id="bpmEditorName" type="text" value="叶文涛" placeholder="用于报告命名和责任编辑">
-	              </label>
-	              <label>
-	                <span>密码</span>
-	                <input id="bpmPassword" type="password" placeholder="仅本次使用，不保存">
+              <label>
+                <span>密码</span>
+                <input id="bpmPassword" type="password" autocomplete="new-password" placeholder="保存或更新时必填，不会回显">
               </label>
+              <div class="top-actions">
+                <button class="primary" id="saveBpmCredentials" type="button"><i data-lucide="save" size="16"></i>保存配置</button>
+                <button class="danger" id="clearBpmCredentials" type="button"><i data-lucide="trash-2" size="16"></i>清除配置</button>
+              </div>
               <div class="file-state" id="bpmStatus">请选择新增作译者或填报选题；选题只暂存草稿，不办理提交。</div>
             </div>
           </section>
@@ -1429,6 +1428,7 @@
     let bpmTopic = null;
     let authorMaintenance = null;
     let currentUser = null;
+    let bpmCredentialConfigured = false;
     const tabs = document.getElementById("tabs");
     const sectionTitle = document.getElementById("sectionTitle");
     const sectionSub = document.getElementById("sectionSub");
@@ -1462,6 +1462,11 @@
     const loginError = document.getElementById("loginError");
     const registerError = document.getElementById("registerError");
     const currentUserName = document.getElementById("currentUserName");
+    const bpmCredentialAccount = document.getElementById("bpmCredentialAccount");
+    const bpmUser = document.getElementById("bpmUser");
+    const bpmPassword = document.getElementById("bpmPassword");
+    const saveBpmCredentials = document.getElementById("saveBpmCredentials");
+    const clearBpmCredentials = document.getElementById("clearBpmCredentials");
     const authBusy = new AuthBusyState();
     const authSession = new AuthSessionGeneration();
 
@@ -1521,6 +1526,71 @@
       return `phei-report-draft-v3:${user.id}`;
     }
 
+    function purgeLegacyBpmStorage() {
+      localStorage.removeItem("phei-bpm-credentials");
+      localStorage.removeItem("phei-bpm-settings");
+      for (let index = localStorage.length - 1; index >= 0; index -= 1) {
+        const key = localStorage.key(index);
+        if (!key?.startsWith("phei-report-draft-v3:")) continue;
+        try {
+          const data = JSON.parse(localStorage.getItem(key));
+          if (!data || typeof data !== "object") continue;
+          let changed = false;
+          if (data.bpm) {
+            delete data.bpm;
+            changed = true;
+          }
+          if (data.bpmCredentials) {
+            delete data.bpmCredentials;
+            changed = true;
+          }
+          if (data.bpmTopic?.bpm) {
+            delete data.bpmTopic.bpm;
+            changed = true;
+          }
+          if (data.bpmTopic?.credentials) {
+            delete data.bpmTopic.credentials;
+            changed = true;
+          }
+          if (changed) localStorage.setItem(key, JSON.stringify(data));
+        } catch (error) {
+          console.warn("无法清理旧版 BPM 本地配置", error);
+        }
+      }
+    }
+
+    function setBpmCredentialStatus(status = {}) {
+      bpmCredentialConfigured = Boolean(status.configured);
+      bpmCredentialAccount.textContent = bpmCredentialConfigured
+        ? `已配置 · ${status.accountMasked || "账号已保存"} · 密码已保存`
+        : "尚未配置 BPM 账号";
+      clearBpmCredentials.disabled = !bpmCredentialConfigured;
+    }
+
+    async function loadBpmCredentialStatus(session = captureSession()) {
+      if (!currentUser || !isCurrentSession(session)) return;
+      try {
+        const response = await apiFetch("/api/integrations/phei-bpm", { cache: "no-store", session });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) throw new Error(await responseError(response, "无法读取 BPM 配置"));
+        const status = await response.json();
+        if (!isCurrentSession(session)) return;
+        setBpmCredentialStatus(status);
+      } catch (error) {
+        if (!isCurrentSession(session)) return;
+        bpmCredentialConfigured = false;
+        bpmCredentialAccount.textContent = "无法读取 BPM 配置";
+        clearBpmCredentials.disabled = true;
+        bpmStatus.textContent = error.message || "无法读取 BPM 配置";
+      }
+    }
+
+    function guideBpmCredentialSetup() {
+      bpmStatus.textContent = "请先在 BPM 配置中保存账号和密码。";
+      bpmUser.focus();
+      showToast("请先保存 BPM 配置");
+    }
+
     function resetFileInput(id) {
       document.getElementById(id).value = "";
     }
@@ -1550,15 +1620,15 @@
       document.getElementById("quickReportState").textContent = "提供一到六正文和评分";
       document.getElementById("projectName").textContent = "新建选题";
       document.getElementById("projectMeta").textContent = "等待上传选题申报表";
-      document.getElementById("bpmUser").value = "";
-      document.getElementById("bpmPassword").value = "";
-      document.getElementById("bpmEditorName").value = document.getElementById("bpmEditorName").defaultValue;
+      bpmUser.value = "";
+      bpmPassword.value = "";
+      setBpmCredentialStatus();
       document.getElementById("bpmStatus").textContent = "请选择新增作译者或填报选题；选题只暂存草稿，不办理提交。";
       progressPanel.hidden = true;
       progressBar.style.width = "0%";
       bpmProgressPanel.hidden = true;
       bpmProgressBar.style.width = "0%";
-      ["importBpmSources", "generateAll", "queueBpm", "queueAuthor", "logoutButton"].forEach((id) => {
+      ["importBpmSources", "generateAll", "queueBpm", "queueAuthor", "saveBpmCredentials", "logoutButton"].forEach((id) => {
         document.getElementById(id).disabled = false;
       });
       reportView.hidden = false;
@@ -1628,6 +1698,7 @@
       workspace.hidden = false;
       render();
       renderBpmPreview();
+      loadBpmCredentialStatus();
       refreshBpmJobs();
       if (window.lucide) window.lucide.createIcons();
     }
@@ -1971,7 +2042,7 @@
     }
 
     function bpmEditorName() {
-      return (document.getElementById("bpmEditorName")?.value || "叶文涛").trim() || "叶文涛";
+      return currentUser?.displayName || "";
     }
 
     function formatChineseDate(date = new Date()) {
@@ -2013,6 +2084,8 @@
 	    function currentBpmTopic() {
 	      const title = document.getElementById("projectName").textContent || "选题策划报告";
 	      const topic = { ...(bpmTopic || {}) };
+	      delete topic.bpm;
+	      delete topic.credentials;
 	      topic.class1 = "02";
 	      topic.class2 = "0201";
 	      topic.gbClass = "G";
@@ -2031,33 +2104,20 @@
       }
 	      return { ...topic, ...scoreMapForBpm() };
 	    }
-
-    function currentBpmCredentials() {
-      return {
-        url: document.getElementById("bpmUrl").value || "http://bpm.phei.com.cn:8088/portal/r/w",
-        user: document.getElementById("bpmUser").value.trim(),
-        name: bpmEditorName(),
-        password: document.getElementById("bpmPassword").value
-      };
-    }
-
     function currentBpmPayload() {
-      const bpm = currentBpmCredentials();
       const title = document.getElementById("projectName").textContent || "选题策划报告";
       bpmTopic = currentBpmTopic();
       return {
         title,
-        editorName: bpm.name,
         sections,
         scores: scoreItems,
-        total: scoreItems.reduce((sum, item) => sum + Number(item[2] || 0), 0),
-        bpmTopic,
-        bpm
+        total: currentScoreTotal(),
+        bpmTopic
       };
     }
 
-    function hasBpmCredentials(bpm) {
-      return Boolean(bpm.user && bpm.name && bpm.password);
+    function currentScoreTotal() {
+      return scoreItems.reduce((sum, item) => sum + Number(item[2] || 0), 0);
     }
 
     function renderBpmPreview() {
@@ -2109,13 +2169,13 @@
       return {
         queued: "排队中",
         running: "填报中",
-        completed: "已完成",
+        succeeded: "已完成",
         failed: "失败"
       }[status] || status;
     }
 
     function jobStatusClass(status) {
-      if (status === "completed") return "done";
+      if (status === "succeeded") return "done";
       if (status === "failed") return "error";
       return "";
     }
@@ -2295,9 +2355,74 @@
 
     document.getElementById("menuReport").addEventListener("click", () => switchMainView("report"));
     document.getElementById("menuBpm").addEventListener("click", () => switchMainView("bpm"));
+    document.getElementById("bpmSettingsButton").addEventListener("click", () => {
+      switchMainView("bpm");
+      bpmUser.focus();
+    });
     document.getElementById("refreshBpmJobs").addEventListener("click", () => {
       refreshBpmJobs();
       showToast("任务日志已刷新");
+    });
+
+    saveBpmCredentials.addEventListener("click", async () => {
+      const session = captureSession();
+      if (!isCurrentSession(session)) return;
+      const account = bpmUser.value.trim();
+      const password = bpmPassword.value;
+      if (!account || !password.trim()) {
+        bpmStatus.textContent = "保存或更新时请同时填写 BPM 账号和密码。";
+        showToast("请填写 BPM 账号和密码");
+        return;
+      }
+      saveBpmCredentials.disabled = true;
+      try {
+        const response = await apiFetch("/api/integrations/phei-bpm", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ account, password }),
+          session
+        });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) throw new Error(await responseError(response, "保存 BPM 配置失败"));
+        const status = await response.json();
+        if (!isCurrentSession(session)) return;
+        bpmUser.value = "";
+        bpmPassword.value = "";
+        setBpmCredentialStatus(status);
+        bpmStatus.textContent = "BPM 配置已保存。";
+        showToast("BPM 配置已保存");
+      } catch (error) {
+        if (!isCurrentSession(session)) return;
+        bpmStatus.textContent = error.message || "保存 BPM 配置失败";
+        showToast("保存 BPM 配置失败");
+      } finally {
+        if (isCurrentSession(session)) saveBpmCredentials.disabled = false;
+      }
+    });
+
+    clearBpmCredentials.addEventListener("click", async () => {
+      const session = captureSession();
+      if (!isCurrentSession(session) || !bpmCredentialConfigured) return;
+      if (!window.confirm("确认清除已保存的 BPM 账号和密码？之后需要重新保存才能加入 BPM 队列。")) return;
+      clearBpmCredentials.disabled = true;
+      try {
+        const response = await apiFetch("/api/integrations/phei-bpm", { method: "DELETE", session });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) throw new Error(await responseError(response, "清除 BPM 配置失败"));
+        const status = await response.json();
+        if (!isCurrentSession(session)) return;
+        bpmUser.value = "";
+        bpmPassword.value = "";
+        setBpmCredentialStatus(status);
+        bpmStatus.textContent = "BPM 配置已清除。";
+        showToast("BPM 配置已清除");
+      } catch (error) {
+        if (!isCurrentSession(session)) return;
+        bpmStatus.textContent = error.message || "清除 BPM 配置失败";
+        showToast("清除 BPM 配置失败");
+      } finally {
+        if (isCurrentSession(session) && bpmCredentialConfigured) clearBpmCredentials.disabled = false;
+      }
     });
 
     document.getElementById("fileInput").addEventListener("change", (event) => {
@@ -2563,8 +2688,8 @@
         return;
       }
       const payload = currentBpmPayload();
-      if (!hasBpmCredentials(payload.bpm)) {
-        showToast("请填写 BPM 账号、姓名和密码");
+      if (!bpmCredentialConfigured) {
+        guideBpmCredentialSetup();
         return;
       }
       const title = payload.title;
@@ -2591,7 +2716,6 @@
         finishBpmProgress("选题填报已加入队列", session);
         bpmStatus.textContent = `选题填报已加入队列：${result.title || title}`;
         document.getElementById("fileState").textContent = "选题填报已加入队列";
-        document.getElementById("bpmPassword").value = "";
         await refreshBpmJobs(session);
         if (!isCurrentSession(session)) return;
         showToast("选题填报已加入队列");
@@ -2611,8 +2735,8 @@
       if (!isCurrentSession(session)) return;
       saveActiveText();
       const payload = currentBpmPayload();
-      if (!hasBpmCredentials(payload.bpm)) {
-        showToast("请填写 BPM 账号、姓名和密码");
+      if (!bpmCredentialConfigured) {
+        guideBpmCredentialSetup();
         return;
       }
       const author = payload.bpmTopic.authorMaintenance || {};
@@ -2648,7 +2772,6 @@
         if (!isCurrentSession(session)) return;
         finishBpmProgress("作译者维护已加入队列", session);
         bpmStatus.textContent = `作译者维护已加入队列：${result.title || authorName}`;
-        document.getElementById("bpmPassword").value = "";
         await refreshBpmJobs(session);
         if (!isCurrentSession(session)) return;
         showToast("作译者维护已加入队列");
@@ -2674,6 +2797,7 @@
       }
     }
 
+    purgeLegacyBpmStorage();
     clearWorkspaceState();
     renderPending();
     render();

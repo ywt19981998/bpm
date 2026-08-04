@@ -33,7 +33,31 @@ test("registration collects only account, name, password, and password confirmat
 
 test("authenticated navigation exposes the current name and icon-only logout control", () => {
   assert.match(source, /id="currentUserName"/);
+  assert.match(source, /id="bpmSettingsButton"[^>]*aria-label="BPM 配置"/);
   assert.match(source, /id="logoutButton"[^>]*aria-label="退出登录"/);
+});
+
+test("BPM credentials are configured per session without exposing stored secrets", () => {
+  assert.doesNotMatch(source, /id="bpmUrl"/);
+  assert.doesNotMatch(source, /id="bpmEditorName"/);
+  assert.match(source, /id="bpmUser"/);
+  assert.match(source, /id="bpmPassword"/);
+  assert.match(source, /id="saveBpmCredentials"/);
+  assert.match(source, /id="clearBpmCredentials"/);
+  assert.match(source, /id="bpmCredentialAccount"/);
+  assert.match(source, /async function loadBpmCredentialStatus\(/);
+  assert.match(source, /apiFetch\("\/api\/integrations\/phei-bpm"/);
+  assert.match(source, /method:\s*"PUT"/);
+  assert.match(source, /method:\s*"DELETE"/);
+  assert.match(source, /密码已保存/);
+});
+
+test("legacy browser BPM secrets are purged before user drafts are restored", () => {
+  assert.match(source, /function purgeLegacyBpmStorage\(/);
+  assert.match(source, /localStorage\.removeItem\("phei-bpm-credentials"\)/);
+  assert.match(source, /delete data\.bpm/);
+  assert.match(source, /delete data\.bpmTopic\.bpm/);
+  assert.match(source, /purgeLegacyBpmStorage\(\);[\s\S]*loadCurrentUser\(\);/);
 });
 
 test("auth state is restored before the workspace is shown", () => {
