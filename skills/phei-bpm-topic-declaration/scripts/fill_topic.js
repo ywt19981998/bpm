@@ -794,19 +794,55 @@ async function openTopicPopup(page) {
   return { popup, formFrame };
 }
 
+async function waitForSavedTopicLink(
+  page,
+  {
+    cno,
+    bookName,
+    timeout = 45000,
+    pollMs = 500,
+  } = {},
+) {
+  const target = String(cno || bookName || '').trim();
+  if (!target) throw new Error('Cannot locate saved BPM draft without a CNO or book name');
+
+  const deadline = Date.now() + timeout;
+  let lastTitles = [];
+  let worklistFrameCount = 0;
+
+  while (Date.now() <= deadline) {
+    const frames = page.frames().filter((frame) => frame.url().includes('WorkFlow_Execute_Worklist'));
+    worklistFrameCount = frames.length;
+    lastTitles = [];
+
+    for (const frame of frames) {
+      const matchingLinks = frame.locator('a').filter({ hasText: target });
+      const count = await matchingLinks.count().catch(() => 0);
+      for (let index = 0; index < count; index += 1) {
+        const link = matchingLinks.nth(index);
+        const title = String(await link.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
+        if (title) lastTitles.push(title);
+        if (await link.isVisible().catch(() => false)) {
+          return { link, frame, title };
+        }
+      }
+    }
+
+    if (Date.now() < deadline) await page.waitForTimeout(pollMs);
+  }
+
+  throw new Error(
+    `Saved BPM draft "${target}" was not found after refreshing the worklist for ${timeout}ms. `
+    + `Checked ${worklistFrameCount} worklist frame(s). `
+    + `Matching titles seen: ${lastTitles.slice(0, 10).join(' | ') || '(none)'}`,
+  );
+}
+
 async function reopenSavedTopicPopup(page, cno, bookName) {
   await page.locator('li.top-navitem-panel').filter({ hasText: '编辑' }).first().click();
   await page.waitForTimeout(500);
   await page.locator('div.nav-item-func.metro-nav-goto').filter({ hasText: '选题申报' }).first().click();
-  const deadline = Date.now() + 20000;
-  let listFrame = null;
-  while (!listFrame && Date.now() < deadline) {
-    listFrame = page.frames().find((frame) => frame.url().includes('WorkFlow_Execute_Worklist'));
-    if (!listFrame) await page.waitForTimeout(500);
-  }
-  if (!listFrame) throw new Error('Worklist frame not found while reopening saved draft');
-  const savedLink = listFrame.locator('a').filter({ hasText: cno || bookName }).first();
-  await savedLink.waitFor({ state: 'visible', timeout: 15000 });
+  const { link: savedLink } = await waitForSavedTopicLink(page, { cno, bookName });
   const popupPromise = page.waitForEvent('popup', { timeout: 15000 });
   await savedLink.click();
   const popup = await popupPromise;
@@ -1051,32 +1087,22 @@ async function verifyCreatedTitle(page, expectedBookName, expectedCno) {
   await page.locator('li.top-navitem-panel').filter({ hasText: '编辑' }).first().click();
   await page.waitForTimeout(1000);
   await page.locator('div.nav-item-func.metro-nav-goto').filter({ hasText: '选题申报' }).first().click();
-  await page.waitForTimeout(8000);
-  const listFrame = page.frames().find((f) => f.url().includes('WorkFlow_Execute_Worklist'));
-  if (!listFrame) throw new Error('Worklist frame not found during verification');
-
-  const titles = await listFrame.locator('a').evaluateAll((anchors) => anchors
-    .map((anchor) => (anchor.textContent || '').replace(/\s+/g, ' ').trim())
-    .filter(Boolean));
   const expectedCnoText = String(expectedCno || '').trim();
   const expectedBookNameText = String(expectedBookName || '').trim();
-  const exactCurrent = titles.find((title) => (
-    (!expectedCnoText || title.includes(expectedCnoText))
-    && (!expectedBookNameText || title.includes(expectedBookNameText))
-  ));
-  const cnoOnly = expectedCnoText
-    ? titles.find((title) => title.includes(expectedCnoText))
-    : null;
-  const bookNameOnly = expectedBookNameText
-    ? titles.find((title) => title.includes(expectedBookNameText))
-    : null;
+  const { title } = await waitForSavedTopicLink(page, {
+    cno: expectedCnoText,
+    bookName: expectedBookNameText,
+  });
+  const cnoMatches = !expectedCnoText || title.includes(expectedCnoText);
+  const bookNameMatches = !expectedBookNameText || title.includes(expectedBookNameText);
+  const exactCurrent = cnoMatches && bookNameMatches ? title : null;
 
   return {
     ok: !!exactCurrent,
     title: exactCurrent || null,
-    cnoOnly: cnoOnly || null,
-    bookNameOnly: bookNameOnly || null,
-    recentTitles: titles.slice(0, 20),
+    cnoOnly: cnoMatches ? title : null,
+    bookNameOnly: bookNameMatches ? title : null,
+    recentTitles: [title],
   };
 }
 
@@ -1383,7 +1409,13 @@ async function main() {
   throw new Error('Usage: node fill_topic.js inspect [/abs/output/dir] OR node fill_topic.js inspect-picker [/abs/output/dir] OR node fill_topic.js inspect-department-picker [/abs/output/dir] OR node fill_topic.js dry-run /abs/path/topic.json OR node fill_topic.js debug-main /abs/path/topic.json OR node fill_topic.js submit-topic /abs/path/topic.json OR node fill_topic.js submit-author /abs/path/topic.json');
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+module.exports = {
+  waitForSavedTopicLink,
+};
+
+if (require.main === module) {
+  main().catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });
+}

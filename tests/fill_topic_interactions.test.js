@@ -12,6 +12,7 @@ const scriptPath = path.join(
   'fill_topic.js',
 );
 const source = fs.readFileSync(scriptPath, 'utf8');
+const { waitForSavedTopicLink } = require(scriptPath);
 
 function functionBody(name) {
   const start = source.indexOf(`async function ${name}(`);
@@ -97,7 +98,70 @@ test('cost estimate reopens the saved draft instead of reusing the post-save fra
   assert.match(source, /await popup\.close\(\)/);
 });
 
+test('saved draft lookup rescans all worklist frames until the new list appears', async () => {
+  const staleFrame = createFakeWorklistFrame(['XT20260001 旧选题']);
+  const freshFrame = createFakeWorklistFrame(['XT20262784 人工智能通识（应用驱动）']);
+  let pollCount = 0;
+  const page = {
+    frames() {
+      return pollCount === 0 ? [staleFrame] : [staleFrame, freshFrame];
+    },
+    async waitForTimeout() {
+      pollCount += 1;
+    },
+  };
+
+  const result = await waitForSavedTopicLink(page, {
+    cno: 'XT20262784',
+    bookName: '人工智能通识（应用驱动）',
+    timeout: 1000,
+    pollMs: 1,
+  });
+
+  assert.equal(result.frame, freshFrame);
+  assert.equal(await result.link.innerText(), 'XT20262784 人工智能通识（应用驱动）');
+  assert.ok(pollCount >= 1);
+});
+
+test('final BPM verification uses the resilient saved-draft lookup', () => {
+  const body = functionBody('verifyCreatedTitle');
+  assert.match(body, /waitForSavedTopicLink/);
+});
+
 test('cost estimate uses the fast BPM subform opener and clears temporary author data', () => {
   assert.match(source, /\bopenOtherBindReport\(/);
   assert.match(source, /clearMainAuthorFields/);
 });
+
+function createFakeWorklistFrame(titles) {
+  const links = titles.map((title) => ({
+    async innerText() {
+      return title;
+    },
+    async isVisible() {
+      return true;
+    },
+  }));
+
+  return {
+    url() {
+      return 'http://bpm.example/WorkFlow_Execute_Worklist';
+    },
+    locator(selector) {
+      assert.equal(selector, 'a');
+      return {
+        filter({ hasText }) {
+          const matches = links.filter((link) => titles[links.indexOf(link)].includes(hasText));
+          return {
+            async count() {
+              return matches.length;
+            },
+            nth(index) {
+              return matches[index];
+            },
+          };
+        },
+      };
+    },
+  };
+}
