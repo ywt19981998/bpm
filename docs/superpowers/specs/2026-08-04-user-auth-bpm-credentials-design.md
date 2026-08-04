@@ -100,8 +100,7 @@ SQLite 数据库默认位于 `data/app.db`，数据库文件不提交 Git。
 - `id`：整数主键。
 - `user_id`：关联用户。
 - `system_type`：外部系统类型，BPM 使用 `phei_bpm`。
-- `account_cipher`：加密后的账号。
-- `secret_cipher`：加密后的密码。
+- `ciphertext`：将账号和密码组成 JSON 后整体加密得到的密文。
 - `nonce`：AES-GCM 随机参数。
 - `key_version`：加密密钥版本。
 - `config_json`：不含敏感信息的扩展配置。
@@ -109,7 +108,7 @@ SQLite 数据库默认位于 `data/app.db`，数据库文件不提交 Git。
 
 `user_id` 与 `system_type` 组成唯一约束。以后新增合同系统、OA 或其他平台时复用该表，不再增加新的密码表。
 
-BPM 凭据使用 AES-GCM 等带认证的加密方式。加密主密钥由 `APP_CREDENTIAL_KEY` 环境变量提供，不写入数据库、源代码或 Git。密钥缺失时服务拒绝保存和解密 BPM 凭据。
+BPM 凭据使用 AES-GCM 等带认证的加密方式。每次保存生成新的随机 nonce，账号和密码作为同一个 JSON 载荷一次性加密，避免在同一密钥下重复使用 nonce。加密主密钥由 `APP_CREDENTIAL_KEY` 环境变量提供，不写入数据库、源代码或 Git。密钥缺失时服务拒绝保存和解密 BPM 凭据。
 
 ### jobs
 
