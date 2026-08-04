@@ -132,6 +132,132 @@ class ServerAuthHttpTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {"jobs": []})
 
 
+class ServerModelConfigTests(unittest.TestCase):
+    valid_model_result = {"title": "测试选题", "sections": [], "scores": []}
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.original_store = server.APP_STORE
+        server.APP_STORE = AppStore(Path(self.temp_dir.name) / "app.db")
+        self.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
+        self.thread.start()
+        self.cookie = self.register()
+
+    def tearDown(self):
+        self.httpd.shutdown()
+        self.thread.join()
+        self.httpd.server_close()
+        server.APP_STORE = self.original_store
+        self.temp_dir.cleanup()
+
+    def register(self):
+        status, headers, _ = self.request(
+            "POST",
+            "/api/auth/register",
+            {"username": "model-editor", "password": "S3cure-pass", "displayName": "模型编辑"},
+        )
+        self.assertEqual(status, 201)
+        return headers["Set-Cookie"].split(";", 1)[0]
+
+    def request(self, method, path, payload=None, cookie=None, headers=None):
+        body = None if payload is None else (
+            payload if isinstance(payload, bytes) else json.dumps(payload).encode("utf-8")
+        )
+        request_headers = dict(headers or {})
+        if body is not None:
+            request_headers.setdefault("Content-Type", "application/json")
+        if cookie:
+            request_headers["Cookie"] = cookie
+        connection = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port)
+        connection.request(method, path, body=body, headers=request_headers)
+        response = connection.getresponse()
+        result = response.status, dict(response.getheaders()), response.read().decode("utf-8")
+        connection.close()
+        return result
+
+    def post_generate_form(self, fields, cookie):
+        boundary = "Task8Boundary"
+        parts = []
+        for name, value in fields.items():
+            parts.extend(
+                (
+                    f"--{boundary}\r\n".encode("utf-8"),
+                    f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode("utf-8"),
+                    str(value).encode("utf-8"),
+                    b"\r\n",
+                )
+            )
+        parts.extend(
+            (
+                f"--{boundary}\r\n".encode("utf-8"),
+                b'Content-Disposition: form-data; name="file"; filename="application.docx"\r\n',
+                b"Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n\r\n",
+                b"test-docx",
+                b"\r\n",
+                f"--{boundary}--\r\n".encode("utf-8"),
+            )
+        )
+        return self.request(
+            "POST",
+            "/api/generate-report",
+            payload=b"".join(parts),
+            cookie=cookie,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+
+    def test_full_report_uses_server_pro_model_despite_client_model_fields(self):
+        class Extractor:
+            def build_payload(self, *_args, **_kwargs):
+                return {"title": "测试选题"}
+
+        with (
+            patch.object(server, "load_extractor", return_value=Extractor()),
+            patch.object(server, "build_bpm_topic", return_value={}),
+            patch.object(server, "call_model", return_value=self.valid_model_result) as call,
+        ):
+            status, _, body = self.post_generate_form(
+                {
+                    "model": "attacker-model",
+                    "apiKey": "attacker-key",
+                    "modelUrl": "https://attacker.invalid",
+                },
+                cookie=self.cookie,
+            )
+
+        self.assertEqual(status, 200, body)
+        self.assertEqual(server.DEFAULT_MODEL, "deepseek-v4-pro")
+        self.assertEqual(call.call_args.args[1:], (server.DEFAULT_MODEL_URL, server.DEFAULT_API_KEY, "deepseek-v4-pro"))
+
+    def test_missing_server_key_returns_a_generic_configuration_error(self):
+        with patch.object(server, "DEFAULT_API_KEY", ""):
+            with self.assertRaisesRegex(ValueError, "模型服务暂不可用") as error:
+                server.call_model("test prompt", server.DEFAULT_MODEL_URL, server.DEFAULT_API_KEY, server.DEFAULT_MODEL)
+
+        self.assertNotIn("DEEPSEEK_API_KEY", str(error.exception))
+
+    def test_missing_server_key_returns_503_without_echoing_client_key(self):
+        class Extractor:
+            def build_payload(self, *_args, **_kwargs):
+                return {"title": "测试选题"}
+
+        log_entries = []
+        with (
+            patch.object(server, "DEFAULT_API_KEY", ""),
+            patch.object(server, "load_extractor", return_value=Extractor()),
+            patch.object(server, "runtime_log", side_effect=log_entries.append),
+            patch.object(server, "build_bpm_topic", return_value={}),
+        ):
+            status, _, body = self.post_generate_form(
+                {"apiKey": "attacker-key", "model": "attacker-model"}, cookie=self.cookie
+            )
+
+        self.assertEqual(status, 503)
+        self.assertEqual(body, server.MODEL_CONFIGURATION_ERROR)
+        self.assertNotIn("attacker-key", body)
+        self.assertNotIn("attacker-key", "\n".join(log_entries))
+
+
 class ServerCredentialHttpTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()

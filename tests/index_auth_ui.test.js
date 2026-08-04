@@ -60,6 +60,16 @@ test("legacy browser BPM secrets are purged before user drafts are restored", ()
   assert.match(source, /purgeLegacyBpmStorage\(\);[\s\S]*loadCurrentUser\(\);/);
 });
 
+test("model configuration stays on the server and legacy browser configuration is removed", () => {
+  ["modelUrl", "modelName", "apiKey", "saveModel"].forEach((id) => {
+    assert.doesNotMatch(source, new RegExp(`id="${id}"`));
+  });
+  assert.doesNotMatch(source, /form\.append\("model(?:Url)?"/);
+  assert.doesNotMatch(source, /form\.append\("apiKey"/);
+  assert.match(source, /localStorage\.removeItem\("phei-model-config"\)/);
+  assert.doesNotMatch(source, /localStorage\.(?:getItem|setItem)\("phei-model-config"/);
+});
+
 test("auth state is restored before the workspace is shown", () => {
   assert.match(source, /async function loadCurrentUser\(/);
   assert.match(source, /await apiFetch\("\/api\/auth\/me"/);

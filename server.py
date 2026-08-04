@@ -89,7 +89,19 @@ def read_multipart_form(fp, headers, environ):
 
 DEFAULT_MODEL_URL = os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").strip()
 DEFAULT_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "").strip()
-DEFAULT_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash").strip()
+DEFAULT_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro").strip()
+FAST_MODEL = os.environ.get("DEEPSEEK_FAST_MODEL", "deepseek-v4-flash").strip()
+
+MODEL_CONFIGURATION_ERROR = "模型服务暂不可用，请联系管理员检查服务端配置。"
+MODEL_REQUEST_ERROR = "模型服务暂不可用，请稍后重试。"
+
+
+class ModelServiceError(RuntimeError):
+    pass
+
+
+class ModelConfigurationError(ModelServiceError, ValueError):
+    pass
 
 JOB_QUEUE: queue.Queue = queue.Queue()
 
@@ -1217,9 +1229,9 @@ def build_prompt(facts: dict) -> str:
 
 def call_model(prompt: str, model_url: str, api_key: str, model: str) -> dict:
     endpoint = normalize_model_url(model_url)
-    resolved_api_key = (api_key or DEFAULT_API_KEY).strip()
+    resolved_api_key = api_key.strip()
     if not resolved_api_key:
-        raise ValueError("请填写模型 API Key，或在启动服务前设置 DEEPSEEK_API_KEY 环境变量。")
+        raise ModelConfigurationError(MODEL_CONFIGURATION_ERROR)
     payload = {
         "model": (model or DEFAULT_MODEL).strip(),
         "messages": [
@@ -1243,11 +1255,26 @@ def call_model(prompt: str, model_url: str, api_key: str, model: str) -> dict:
         with urllib.request.urlopen(request, timeout=120) as response:
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"模型接口错误 {exc.code}: {detail}") from exc
-    result = json.loads(body)
-    content = result["choices"][0]["message"]["content"]
-    return extract_json_from_text(content)
+        runtime_log(f"model request failed status={exc.code}")
+        raise ModelServiceError(MODEL_REQUEST_ERROR) from exc
+    except urllib.error.URLError as exc:
+        runtime_log(f"model request failed type={type(exc.reason).__name__}")
+        raise ModelServiceError(MODEL_REQUEST_ERROR) from exc
+    try:
+        result = json.loads(body)
+        content = result["choices"][0]["message"]["content"]
+        return extract_json_from_text(content)
+    except (KeyError, TypeError, json.JSONDecodeError) as exc:
+        runtime_log(f"model response invalid type={type(exc).__name__}")
+        raise ModelServiceError(MODEL_REQUEST_ERROR) from exc
+
+
+def call_complete_report_model(prompt: str) -> dict:
+    return call_model(prompt, DEFAULT_MODEL_URL, DEFAULT_API_KEY, DEFAULT_MODEL)
+
+
+def call_fast_model(prompt: str) -> dict:
+    return call_model(prompt, DEFAULT_MODEL_URL, DEFAULT_API_KEY, FAST_MODEL)
 
 
 def normalize_generated(result: dict) -> dict:
@@ -1495,7 +1522,7 @@ def import_bpm_sources(application_bytes: bytes, application_name: str, report_b
                     pass
 
 
-def generate_report_from_upload(file_bytes: bytes, filename: str, model_url: str, api_key: str, model: str) -> dict:
+def generate_report_from_upload(file_bytes: bytes, filename: str) -> dict:
     suffix = Path(filename or "application.docx").suffix or ".docx"
     if suffix.lower() != ".docx":
         raise ValueError("请上传 .docx 格式的选题申报表，暂不支持 .doc 或其他文件格式。")
@@ -1506,7 +1533,7 @@ def generate_report_from_upload(file_bytes: bytes, filename: str, model_url: str
         extractor = load_extractor()
         facts = extractor.build_payload(tmp_path, include_sensitive=False)
         prompt = build_prompt(facts)
-        result = call_model(prompt, model_url, api_key, model)
+        result = call_complete_report_model(prompt)
         normalized = normalize_generated(result)
         normalized["bpmTopic"] = build_bpm_topic(facts, normalized)
         return normalized
@@ -1802,10 +1829,7 @@ class Handler(SimpleHTTPRequestHandler):
             file_bytes = file_item.file.read()
             filename = getattr(file_item, "filename", "application.docx")
             runtime_log(f"generate-report file filename={filename} bytes={len(file_bytes)}")
-            model_url = form.getfirst("modelUrl", DEFAULT_MODEL_URL)
-            api_key = form.getfirst("apiKey") or DEFAULT_API_KEY
-            model = form.getfirst("model", DEFAULT_MODEL)
-            result = generate_report_from_upload(file_bytes, filename, model_url, api_key, model)
+            result = generate_report_from_upload(file_bytes, filename)
             body = json.dumps(result, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -1813,6 +1837,14 @@ class Handler(SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
             runtime_log(f"generate-report ok title={result.get('title', '')} bytes={len(body)}")
+        except ModelServiceError as exc:
+            runtime_log(f"generate-report model error type={type(exc).__name__}")
+            body = str(exc).encode("utf-8")
+            self.send_response(503)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
         except Exception as exc:
             runtime_log(f"generate-report error {type(exc).__name__}: {exc}")
             body = str(exc).encode("utf-8")

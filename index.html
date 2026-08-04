@@ -1291,25 +1291,6 @@
 
     <aside class="right">
       <section class="panel">
-        <h3 class="panel-title"><i data-lucide="bot" size="16"></i>模型配置</h3>
-        <div class="model-form">
-          <label>
-            <span>模型 URL</span>
-            <input id="modelUrl" type="url" value="https://api.deepseek.com" placeholder="https://api.example.com/v1/chat/completions">
-          </label>
-          <label>
-            <span>模型名称</span>
-            <input id="modelName" type="text" value="deepseek-v4-flash" placeholder="gpt-4.1 / qwen-plus / deepseek-chat">
-          </label>
-          <label>
-            <span>API Key</span>
-            <input id="apiKey" type="password" placeholder="可临时填写；或用 DEEPSEEK_API_KEY 启动服务">
-          </label>
-          <button id="saveModel"><i data-lucide="key-round" size="15"></i>保存配置</button>
-        </div>
-      </section>
-
-      <section class="panel">
         <h3 class="panel-title"><i data-lucide="gauge" size="16"></i>建议评分</h3>
         <div class="score-total">
           <div>
@@ -1691,6 +1672,7 @@
       authSession.activate(user);
       resetAuthForms();
       clearWorkspaceState();
+      localStorage.removeItem("phei-model-config");
       currentUser = user;
       loadUserDraft(user);
       currentUserName.textContent = user.displayName || user.username;
@@ -2572,10 +2554,6 @@
         if (!(await assertBackendReady(session)) || !isCurrentSession(session)) return;
         const form = new FormData();
         form.append("file", file);
-        form.append("modelUrl", document.getElementById("modelUrl").value || "https://api.deepseek.com");
-        form.append("model", document.getElementById("modelName").value || "deepseek-v4-flash");
-        const apiKey = document.getElementById("apiKey").value;
-        if (apiKey) form.append("apiKey", apiKey);
 
         const response = await apiFetch("/api/generate-report", {
           method: "POST",
@@ -2612,15 +2590,6 @@
       if (!isCurrentSession(session)) return;
       localStorage.setItem(draftStorageKey(currentUser), JSON.stringify({ sections, scoreItems, bpmTopic, authorMaintenance }));
       showToast("草稿已保存");
-    });
-
-    document.getElementById("saveModel").addEventListener("click", () => {
-      const config = {
-        modelUrl: document.getElementById("modelUrl").value,
-        modelName: document.getElementById("modelName").value
-      };
-      localStorage.setItem("phei-model-config", JSON.stringify(config));
-      showToast("模型配置已保存");
     });
 
     document.getElementById("recalcScore").addEventListener("click", () => {
@@ -2785,17 +2754,6 @@
         if (isCurrentSession(session)) button.disabled = false;
       }
     });
-
-    const modelConfig = localStorage.getItem("phei-model-config");
-    if (modelConfig) {
-      try {
-        const config = JSON.parse(modelConfig);
-        document.getElementById("modelUrl").value = config.modelUrl || "https://api.deepseek.com";
-        document.getElementById("modelName").value = config.modelName || "deepseek-v4-flash";
-      } catch (error) {
-        console.warn(error);
-      }
-    }
 
     purgeLegacyBpmStorage();
     clearWorkspaceState();
