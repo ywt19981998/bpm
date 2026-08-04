@@ -2323,24 +2323,35 @@
 
     document.getElementById("logoutButton").addEventListener("click", async () => {
       const button = document.getElementById("logoutButton");
+      const busy = authBusy.begin("logout");
+      if (!busy) return;
+      setAuthControlsDisabled(true);
       button.disabled = true;
-      showAuthView("login");
       const session = captureSession();
       let errorMessage = "";
+      let loggedOut = false;
       try {
         const response = await apiFetch("/api/auth/logout", { method: "POST", skipAuthRedirect: true, session });
         if (!isCurrentSession(session)) return;
         if (!response.ok) {
           errorMessage = await responseError(response, "退出登录失败，请重新登录");
           if (!isCurrentSession(session)) return;
+        } else {
+          loggedOut = true;
         }
       } catch (error) {
         if (isCurrentSession(session)) errorMessage = "退出登录失败，请重新登录";
       } finally {
-        if (isCurrentSession(session)) {
-          setAuthError(loginError, errorMessage);
-          button.disabled = false;
+        if (!authBusy.finish(busy) || !isCurrentSession(session)) return;
+        if (loggedOut) {
+          setAuthError(loginError);
+          setAuthError(registerError);
+          showAuthView("login");
+          return;
         }
+        setAuthControlsDisabled(false);
+        button.disabled = false;
+        showToast(errorMessage || "退出登录失败，请重新登录");
       }
     });
 

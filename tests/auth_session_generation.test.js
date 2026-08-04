@@ -59,3 +59,21 @@ test("serializes authentication so a delayed request cannot start a second login
   assert.equal(busy.finish(pendingB), true);
   assert.equal(busy.isBusy(), false);
 });
+
+test("keeps a delayed logout exclusive until its response has completed", async () => {
+  const busy = new AuthBusyState();
+  const pendingLogout = busy.begin("logout");
+  const delayedLogout = deferred();
+  const finishLogout = delayedLogout.promise.finally(() => busy.finish(pendingLogout));
+
+  assert.ok(pendingLogout);
+  assert.equal(busy.begin("loginForm"), null);
+  assert.equal(busy.begin("registerForm"), null);
+
+  delayedLogout.resolve();
+  await finishLogout;
+
+  const pendingLogin = busy.begin("loginForm");
+  assert.ok(pendingLogin);
+  assert.equal(busy.finish(pendingLogin), true);
+});

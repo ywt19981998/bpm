@@ -132,6 +132,22 @@ test("auth view changes reset form busy state while stale submissions cannot res
   assert.match(source, /async function loadCurrentUser[\s\S]*authBusy\.isBusy\(\)/);
 });
 
+test("logout holds the auth lock until its request completes", () => {
+  const start = source.indexOf('document.getElementById("logoutButton").addEventListener');
+  const end = source.indexOf('document.getElementById("chooseFile")', start);
+  const logoutHandler = source.slice(start, end);
+
+  assert.ok(start >= 0 && end > start, "logout handler should be isolated");
+  assert.match(logoutHandler, /const busy = authBusy\.begin\("logout"\)/);
+  assert.match(logoutHandler, /setAuthControlsDisabled\(true\)/);
+  assert.match(logoutHandler, /const session = captureSession\(\);[\s\S]*await apiFetch\("\/api\/auth\/logout"/);
+  assert.match(logoutHandler, /authBusy\.finish\(busy\)/);
+  assert.ok(
+    logoutHandler.indexOf('showAuthView("login")') > logoutHandler.indexOf('await apiFetch("/api/auth/logout"'),
+    "the login view must wait for logout to finish"
+  );
+});
+
 test("loads only local fixed-version scripts and keeps Lucide initialization", () => {
   assert.doesNotMatch(source, /<script[^>]+src=["']https?:\/\//i);
   assert.doesNotMatch(source, /@latest/i);
