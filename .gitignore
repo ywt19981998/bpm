@@ -7,6 +7,7 @@ __pycache__/
 !.env.example
 *.log
 data/
+backups/
 *.db-wal
 *.db-shm
 server.pid
