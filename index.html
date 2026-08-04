@@ -790,6 +790,133 @@
       transform: translateY(0);
     }
 
+    .auth-view {
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+
+    .auth-shell {
+      width: min(100%, 360px);
+    }
+
+    .auth-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 20px;
+    }
+
+    .auth-brand-copy {
+      display: grid;
+      gap: 2px;
+    }
+
+    .auth-tabs {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid var(--line);
+      background: var(--soft);
+      border-radius: 8px;
+      margin-bottom: 12px;
+    }
+
+    .auth-tab {
+      border: 0;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 700;
+    }
+
+    .auth-tab.active {
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: 0 1px 2px rgba(31, 41, 35, 0.08);
+    }
+
+    .auth-form {
+      display: grid;
+      gap: 12px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      padding: 18px;
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+
+    .auth-form label {
+      display: grid;
+      gap: 5px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .auth-form input {
+      width: 100%;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--surface);
+      color: var(--text);
+      padding: 0 10px;
+    }
+
+    .auth-form input:focus {
+      border-color: var(--teal);
+      outline: 2px solid rgba(15, 118, 110, 0.14);
+      outline-offset: 1px;
+    }
+
+    .auth-error {
+      min-height: 18px;
+      margin: 0;
+      color: var(--red);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .user-menu {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: 8px;
+    }
+
+    .current-user {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+
+    .current-user-label {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .current-user-name {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 700;
+    }
+
+    .icon-button {
+      width: 34px;
+      min-width: 34px;
+      height: 34px;
+      min-height: 34px;
+      padding: 0;
+    }
+
     @media (max-width: 1160px) {
       .app {
         grid-template-columns: 220px minmax(520px, 1fr);
@@ -809,6 +936,10 @@
     }
 
     @media (max-width: 840px) {
+      .auth-view {
+        padding: 16px;
+      }
+
       .app {
         display: block;
       }
@@ -871,7 +1002,58 @@
   </style>
 </head>
 <body>
-  <div class="app">
+  <div class="auth-view" id="authView">
+    <section class="auth-shell" aria-labelledby="authTitle">
+      <div class="auth-brand">
+        <div class="brand-mark"><i data-lucide="file-text"></i></div>
+        <div class="auth-brand-copy">
+          <div class="brand-title" id="authTitle">策划报告工作台</div>
+          <div class="brand-sub">教育出版板块</div>
+        </div>
+      </div>
+
+      <div class="auth-tabs" role="tablist" aria-label="账户操作">
+        <button class="auth-tab active" type="button" data-auth-mode="login" role="tab" aria-selected="true">登录</button>
+        <button class="auth-tab" type="button" data-auth-mode="register" role="tab" aria-selected="false">注册</button>
+      </div>
+
+      <form class="auth-form" id="loginForm">
+        <label>
+          <span>账号</span>
+          <input id="loginUsername" name="username" type="text" autocomplete="username" required>
+        </label>
+        <label>
+          <span>密码</span>
+          <input id="loginPassword" name="password" type="password" autocomplete="current-password" required>
+        </label>
+        <p class="auth-error" id="loginError" aria-live="polite" hidden></p>
+        <button class="primary" type="submit">登录</button>
+      </form>
+
+      <form class="auth-form" id="registerForm" hidden>
+        <label>
+          <span>账号</span>
+          <input id="registerUsername" name="username" type="text" autocomplete="username" required>
+        </label>
+        <label>
+          <span>姓名</span>
+          <input id="registerDisplayName" name="displayName" type="text" autocomplete="name" required>
+        </label>
+        <label>
+          <span>密码</span>
+          <input id="registerPassword" name="password" type="password" autocomplete="new-password" required>
+        </label>
+        <label>
+          <span>确认密码</span>
+          <input id="registerPasswordConfirm" name="passwordConfirm" type="password" autocomplete="new-password" required>
+        </label>
+        <p class="auth-error" id="registerError" aria-live="polite" hidden></p>
+        <button class="primary" type="submit">注册并进入工作台</button>
+      </form>
+    </section>
+  </div>
+
+  <div class="app" id="workspace" hidden>
     <aside class="sidebar">
       <div class="brand">
         <div class="brand-mark"><i data-lucide="file-text"></i></div>
@@ -885,6 +1067,14 @@
         <button class="menu-button active" id="menuReport"><i data-lucide="file-pen-line" size="16"></i>策划报告</button>
         <button class="menu-button" id="menuBpm"><i data-lucide="workflow" size="16"></i>BPM 填报</button>
       </nav>
+
+      <div class="user-menu">
+        <div class="current-user">
+          <span class="current-user-label">当前用户</span>
+          <span class="current-user-name" id="currentUserName"></span>
+        </div>
+        <button class="icon-button" id="logoutButton" type="button" aria-label="退出登录" title="退出登录"><i data-lucide="log-out" size="16"></i></button>
+      </div>
 
       <div class="project-switch">
         <div class="project-name" id="projectName">新建选题</div>
@@ -1160,9 +1350,8 @@
         </ul>
       </section>
     </aside>
+    <div class="toast" id="toast">已保存</div>
   </div>
-
-  <div class="toast" id="toast">已保存</div>
 
   <script>
     const sections = [
@@ -1238,6 +1427,7 @@
     let docxExported = false;
     let bpmTopic = null;
     let authorMaintenance = null;
+    let currentUser = null;
     const draftKey = "phei-report-draft-v2";
     const tabs = document.getElementById("tabs");
     const sectionTitle = document.getElementById("sectionTitle");
@@ -1265,6 +1455,13 @@
     const authorTitle = document.getElementById("authorTitle");
     const authorMeta = document.getElementById("authorMeta");
     const authorBadge = document.getElementById("authorBadge");
+    const authView = document.getElementById("authView");
+    const workspace = document.getElementById("workspace");
+    const loginForm = document.getElementById("loginForm");
+    const registerForm = document.getElementById("registerForm");
+    const loginError = document.getElementById("loginError");
+    const registerError = document.getElementById("registerError");
+    const currentUserName = document.getElementById("currentUserName");
 
     sections.forEach((section) => {
       section.text = "";
@@ -1272,6 +1469,95 @@
     });
 
     let progressTimer = null;
+
+    function setAuthError(element, message = "") {
+      element.textContent = message;
+      element.hidden = !message;
+    }
+
+    function showAuthView(mode = "login") {
+      currentUser = null;
+      workspace.hidden = true;
+      authView.hidden = false;
+      loginForm.hidden = mode !== "login";
+      registerForm.hidden = mode !== "register";
+      document.querySelectorAll("[data-auth-mode]").forEach((button) => {
+        const active = button.dataset.authMode === mode;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-selected", String(active));
+      });
+      if (window.lucide) window.lucide.createIcons();
+    }
+
+    function showWorkspace(user) {
+      currentUser = user;
+      currentUserName.textContent = user.displayName || user.username;
+      authView.hidden = true;
+      workspace.hidden = false;
+      render();
+      renderBpmPreview();
+      refreshBpmJobs();
+      if (window.lucide) window.lucide.createIcons();
+    }
+
+    async function apiFetch(url, options = {}) {
+      const response = await fetch(url, options);
+      if (response.status === 401 && !options.skipAuthRedirect) {
+        showAuthView("login");
+        throw new Error("登录已过期，请重新登录");
+      }
+      return response;
+    }
+
+    async function responseError(response, fallback) {
+      try {
+        const data = await response.json();
+        return data.error || fallback;
+      } catch (error) {
+        return fallback;
+      }
+    }
+
+    async function loadCurrentUser() {
+      try {
+        const response = await apiFetch("/api/auth/me", { cache: "no-store" });
+        if (!response.ok) throw new Error(await responseError(response, "无法恢复登录状态"));
+        const data = await response.json();
+        if (!data.user) throw new Error("无法恢复登录状态");
+        showWorkspace(data.user);
+      } catch (error) {
+        showAuthView("login");
+      }
+    }
+
+    async function submitAuthForm(form, errorElement, endpoint, payload) {
+      const button = form.querySelector('button[type="submit"]');
+      button.disabled = true;
+      setAuthError(errorElement);
+      try {
+        const response = await apiFetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          skipAuthRedirect: true
+        });
+        if (!response.ok) {
+          setAuthError(errorElement, await responseError(response, "账户操作失败，请稍后重试"));
+          return;
+        }
+        const data = await response.json();
+        if (!data.user) {
+          setAuthError(errorElement, "账户操作失败，请稍后重试");
+          return;
+        }
+        form.reset();
+        showWorkspace(data.user);
+      } catch (error) {
+        setAuthError(errorElement, "无法连接服务，请稍后重试");
+      } finally {
+        button.disabled = false;
+      }
+    }
 
     function showToast(message) {
       toast.textContent = message;
@@ -1642,7 +1928,7 @@
 
     async function refreshBpmJobs() {
       try {
-        const response = await fetch("/api/bpm-jobs");
+        const response = await apiFetch("/api/bpm-jobs");
         if (!response.ok) throw new Error(await response.text());
         const data = await response.json();
         const jobs = data.jobs || [];
@@ -1679,7 +1965,7 @@
 
     async function assertBackendReady() {
       try {
-        const response = await fetch("/api/health", { cache: "no-store" });
+        const response = await apiFetch("/api/health", { cache: "no-store" });
         if (!response.ok) throw new Error(await response.text());
       } catch (error) {
         throw new Error(`后端连接失败：${location.origin || "当前页面"}，请确认网站服务窗口没有关闭，并使用 http://10.10.35.19:4174/index.html 打开。`);
@@ -1719,6 +2005,53 @@
       scoreRows.innerHTML = "";
       render();
     }
+
+    document.querySelectorAll("[data-auth-mode]").forEach((button) => {
+      button.addEventListener("click", () => {
+        setAuthError(loginError);
+        setAuthError(registerError);
+        showAuthView(button.dataset.authMode);
+      });
+    });
+
+    loginForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await submitAuthForm(loginForm, loginError, "/api/auth/login", {
+        username: document.getElementById("loginUsername").value.trim(),
+        password: document.getElementById("loginPassword").value
+      });
+    });
+
+    registerForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const password = document.getElementById("registerPassword").value;
+      const passwordConfirm = document.getElementById("registerPasswordConfirm").value;
+      if (password !== passwordConfirm) {
+        setAuthError(registerError, "两次输入的密码不一致");
+        return;
+      }
+      await submitAuthForm(registerForm, registerError, "/api/auth/register", {
+        username: document.getElementById("registerUsername").value.trim(),
+        displayName: document.getElementById("registerDisplayName").value.trim(),
+        password
+      });
+    });
+
+    document.getElementById("logoutButton").addEventListener("click", async () => {
+      const button = document.getElementById("logoutButton");
+      button.disabled = true;
+      let errorMessage = "";
+      try {
+        const response = await apiFetch("/api/auth/logout", { method: "POST", skipAuthRedirect: true });
+        if (!response.ok) errorMessage = await responseError(response, "退出登录失败，请重新登录");
+      } catch (error) {
+        errorMessage = "退出登录失败，请重新登录";
+      } finally {
+        showAuthView("login");
+        setAuthError(loginError, errorMessage);
+        button.disabled = false;
+      }
+    });
 
     document.getElementById("chooseFile").addEventListener("click", () => {
       document.getElementById("fileInput").click();
@@ -1800,7 +2133,7 @@
         const form = new FormData();
         form.append("application", quickApplicationFile);
         form.append("report", quickReportFile);
-        const response = await fetch("/api/import-bpm-sources", {
+        const response = await apiFetch("/api/import-bpm-sources", {
           method: "POST",
           body: form
         });
@@ -1878,7 +2211,7 @@
         const apiKey = document.getElementById("apiKey").value;
         if (apiKey) form.append("apiKey", apiKey);
 
-        const response = await fetch("/api/generate-report", {
+        const response = await apiFetch("/api/generate-report", {
           method: "POST",
           body: form
         });
@@ -1962,7 +2295,7 @@
 	        total: scoreItems.reduce((sum, item) => sum + Number(item[2] || 0), 0)
       };
       try {
-        const response = await fetch("/api/export-docx", {
+        const response = await apiFetch("/api/export-docx", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
@@ -2006,7 +2339,7 @@
       button.disabled = true;
       setBpmProgress(40, "正在加入选题填报队列...");
       try {
-        const response = await fetch("/api/bpm-topic-jobs", {
+        const response = await apiFetch("/api/bpm-topic-jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
@@ -2053,7 +2386,7 @@
       button.disabled = true;
       setBpmProgress(40, "正在加入作译者维护队列...");
       try {
-        const response = await fetch("/api/bpm-author-jobs", {
+        const response = await apiFetch("/api/bpm-author-jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
@@ -2110,9 +2443,9 @@
     renderPending();
     render();
     renderBpmPreview();
-    refreshBpmJobs();
+    loadCurrentUser();
     window.setInterval(() => {
-      if (!bpmView.hidden) refreshBpmJobs();
+      if (!workspace.hidden && !bpmView.hidden) refreshBpmJobs();
     }, 5000);
   </script>
 </body>

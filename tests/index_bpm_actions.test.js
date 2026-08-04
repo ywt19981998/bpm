@@ -11,8 +11,8 @@ test('BPM view has separate topic and author buttons', () => {
 });
 
 test('buttons use separate backend endpoints', () => {
-  assert.match(source, /fetch\("\/api\/bpm-author-jobs"/);
-  assert.match(source, /fetch\("\/api\/bpm-topic-jobs"/);
+  assert.match(source, /apiFetch\("\/api\/bpm-author-jobs"/);
+  assert.match(source, /apiFetch\("\/api\/bpm-topic-jobs"/);
 });
 
 test('author copy no longer promises automatic creation', () => {
