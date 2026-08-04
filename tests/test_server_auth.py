@@ -241,6 +241,49 @@ class ServerCredentialHttpTests(unittest.TestCase):
         self.assertEqual(json.loads(body), {"configured": False, "accountMasked": None})
         self.assertNotIn("bpm-secret", body)
 
+    def test_legacy_bpm_submit_uses_current_users_stored_credentials(self):
+        status, _, _ = self.request(
+            "PUT",
+            "/api/integrations/phei-bpm",
+            {"account": "stored-account", "password": "stored-secret"},
+            cookie=self.cookie,
+        )
+        self.assertEqual(status, 200)
+        client_payload = {
+            "title": "可信注入测试",
+            "editorName": "客户端伪造编辑",
+            "bpm": {
+                "user": "client-account",
+                "password": "client-secret",
+                "name": "客户端伪造编辑",
+            },
+        }
+
+        with patch("server.run_bpm_submit", return_value={"ok": True}) as submit:
+            status, _, body = self.request(
+                "POST", "/api/bpm-submit", client_payload, cookie=self.cookie
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"ok": True})
+        trusted_payload = submit.call_args.args[0]
+        self.assertEqual(trusted_payload["editorName"], "张编辑")
+        self.assertEqual(
+            trusted_payload["bpm"],
+            {
+                "url": os.environ.get(
+                    "BPM_URL", "http://bpm.phei.com.cn:8088/portal/r/w"
+                ),
+                "user": "stored-account",
+                "name": "张编辑",
+                "password": "stored-secret",
+            },
+        )
+        self.assertNotIn("client-secret", json.dumps(trusted_payload, ensure_ascii=False))
+        self.assertNotIn("client-account", json.dumps(trusted_payload, ensure_ascii=False))
+        self.assertNotIn("stored-secret", body)
+        self.assertNotIn("client-secret", body)
+
 
 class MultipartFormTests(unittest.TestCase):
     def test_repeated_fields_keep_the_first_value_and_file(self):

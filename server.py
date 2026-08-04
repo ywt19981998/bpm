@@ -192,22 +192,6 @@ def report_file_stem(title: str, editor_name: str, value: date | None = None) ->
     return f"{title_for_report_filename(title)}选题策划报告（高等教育出版分社+{safe_name(editor_name)}+{format_chinese_date(value)}）"
 
 
-def editor_identity(editor_name: str) -> dict:
-    if editor_name == "叶文涛":
-        return {
-            "projectEditorNo": "2024070801",
-            "projectEditorUid": "yewt",
-            "editorNo": "2024070801",
-            "editorUid": "yewt",
-        }
-    return {
-        "projectEditorNo": "",
-        "projectEditorUid": "",
-        "editorNo": "",
-        "editorUid": "",
-    }
-
-
 def first_unique_cell(row, index):
     seen = []
     unique = []
@@ -768,14 +752,11 @@ def build_author_maintenance(facts: dict, result: dict, editor_name: str = "叶�
     work_unit = author_field(facts, "工作单位", "单位名称", "作者单位", "所在单位")
     major = author_field(facts, "专业", "作者专业", "适用专业")
     writing_direction = author_field(facts, "著作方向", "研究方向", "专业方向")
-    editor_identity_map = editor_identity(editor_name)
     return {
         "enabled": bool(name),
         "type": "个人",
         "name": name,
         "contactor": editor_name,
-        "contactorUid": editor_identity_map.get("projectEditorUid", ""),
-        "contactorDeptId": "13640" if editor_name == "叶文涛" else "",
         "gender": author_field(facts, "性别"),
         "certificateType": author_field(facts, "证件类型") or "其他",
         "certificateNo": blank_if_missing(author_field(facts, "证件号", "身份证号")),
@@ -892,7 +873,8 @@ def merge_bpm_topic(payload: dict) -> dict:
     topic["authorName"] = clean_person_name(author_name_source)
     topic["projectEditor"] = editor_name
     topic["editor"] = editor_name
-    topic.update(editor_identity(editor_name))
+    for identity_key in ("projectEditorNo", "projectEditorUid", "editorNo", "editorUid"):
+        topic.pop(identity_key, None)
     sections = {section.get("key"): strip_indent(section.get("text", "")) for section in payload.get("sections", [])}
     topic["brief"] = short_text(first_non_empty(topic.get("brief", ""), sections.get("content", "")))
     topic["reader"] = short_text(first_non_empty(topic.get("reader", ""), sections.get("marketing", "")))
@@ -900,8 +882,8 @@ def merge_bpm_topic(payload: dict) -> dict:
     topic["compare"] = short_text(first_non_empty(bpm_fields.get("compare", ""), topic.get("compare", ""), sections.get("marketing", "")))
     if isinstance(topic.get("authorMaintenance"), dict):
         topic["authorMaintenance"]["contactor"] = editor_name
-        topic["authorMaintenance"]["contactorUid"] = topic.get("projectEditorUid", "")
-        topic["authorMaintenance"]["contactorDeptId"] = "13640" if editor_name == "叶文涛" else ""
+        topic["authorMaintenance"].pop("contactorUid", None)
+        topic["authorMaintenance"].pop("contactorDeptId", None)
     topic.update(report_scores(payload))
     return topic
 
@@ -1041,9 +1023,7 @@ def public_jobs() -> list[dict]:
         return [dict(job) for job in jobs]
 
 
-def create_bpm_job(payload: dict, user: dict, job_type: str = "topic") -> dict:
-    if job_type not in {"topic", "author"}:
-        raise ValueError(f"不支持的 BPM 任务类型：{job_type}")
+def trusted_bpm_payload(payload: dict, user: dict) -> tuple[dict, dict]:
     credentials = APP_STORE.get_integration_credentials(user["id"], "phei_bpm")
     if not credentials:
         raise ValueError("请先保存 BPM 账号和密码。")
@@ -1055,6 +1035,13 @@ def create_bpm_job(payload: dict, user: dict, job_type: str = "topic") -> dict:
         "name": user["display_name"],
         "password": credentials["password"],
     }
+    return trusted_payload, credentials
+
+
+def create_bpm_job(payload: dict, user: dict, job_type: str = "topic") -> dict:
+    if job_type not in {"topic", "author"}:
+        raise ValueError(f"不支持的 BPM 任务类型：{job_type}")
+    trusted_payload, credentials = trusted_bpm_payload(payload, user)
     topic = merge_bpm_topic(trusted_payload)
     if job_type == "topic":
         sections = trusted_payload.get("sections") or []
@@ -1756,9 +1743,13 @@ class Handler(SimpleHTTPRequestHandler):
 
     def handle_bpm_submit(self):
         try:
+            user = self.require_user()
+            if not user:
+                return
             length = int(self.headers.get("Content-Length", "0"))
             payload = json.loads(self.rfile.read(length).decode("utf-8"))
-            result = run_bpm_submit(payload)
+            trusted_payload, _ = trusted_bpm_payload(payload, user)
+            result = run_bpm_submit(trusted_payload)
             body = json.dumps(result, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")

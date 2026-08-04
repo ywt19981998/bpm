@@ -29,8 +29,16 @@ test('worker dispatches jobs by explicit type', () => {
 
 test('BPM jobs use authenticated server-side credentials', () => {
   const createJobBody = functionBody('create_bpm_job');
-  assert.match(source, /get_integration_credentials\(user\["id"\],\s*"phei_bpm"\)/);
-  assert.match(createJobBody, /trusted_payload\s*=\s*deepcopy\(payload\)/);
+  const trustedPayloadBody = functionBody('trusted_bpm_payload');
+  assert.match(trustedPayloadBody, /get_integration_credentials\(user\["id"\],\s*"phei_bpm"\)/);
+  assert.match(trustedPayloadBody, /trusted_payload\s*=\s*deepcopy\(payload\)/);
   assert.doesNotMatch(createJobBody, /credentials\s*=\s*payload\.get\("bpm"\)/);
+  assert.match(createJobBody, /trusted_bpm_payload\(payload,\s*user\)/);
   assert.match(createJobBody, /JOB_QUEUE\.put\(\(job_id,\s*job_type,\s*trusted_payload\)\)/);
+});
+
+test('server does not synthesize BPM person identifiers from display names', () => {
+  assert.doesNotMatch(source, /["']yewt["']/);
+  assert.doesNotMatch(source, /def editor_identity\(/);
+  assert.doesNotMatch(source, /authorMaintenance"\]\["contactorUid"\]/);
 });

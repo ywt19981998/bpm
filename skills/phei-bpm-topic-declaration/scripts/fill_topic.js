@@ -49,8 +49,6 @@ function withDefaults(data) {
       type: '个人',
       name: '',
       contactor: '叶文涛',
-      contactorUid: 'yewt',
-      contactorDeptId: '13640',
       gender: '',
       certificateType: '其他',
       certificateNo: '　',
@@ -109,11 +107,11 @@ function withDefaults(data) {
     project: '无',
     scriptClassify: '普通选题',
     projectEditor: '叶文涛',
-    projectEditorNo: '2024070801',
-    projectEditorUid: 'yewt',
+    projectEditorNo: '',
+    projectEditorUid: '',
     editor: '叶文涛',
-    editorNo: '2024070801',
-    editorUid: 'yewt',
+    editorNo: '',
+    editorUid: '',
     projectDept: '高等教育出版分社/高等信息科技事业部',
     editorDept: '高等教育出版分社/高等信息科技事业部',
     isCost: '1',
@@ -205,19 +203,9 @@ function withDefaults(data) {
   if (merged.authorMaintenance) {
     if (!merged.authorMaintenance.name) merged.authorMaintenance.name = merged.authorName;
     if (!merged.authorMaintenance.contactor) merged.authorMaintenance.contactor = merged.projectEditor;
-    if (!merged.authorMaintenance.contactorUid) merged.authorMaintenance.contactorUid = merged.projectEditorUid;
-    if (!merged.authorMaintenance.contactorDeptId && merged.projectEditor === '叶文涛') merged.authorMaintenance.contactorDeptId = '13640';
     if (!data.authorMaintenance || data.authorMaintenance.enabled === undefined) {
       merged.authorMaintenance.enabled = Boolean(merged.authorMaintenance.name);
     }
-  }
-  if (merged.projectEditor !== '叶文涛') {
-    merged.projectEditorNo = data.projectEditorNo || '';
-    merged.projectEditorUid = data.projectEditorUid || '';
-  }
-  if (merged.editor !== '叶文涛') {
-    merged.editorNo = data.editorNo || '';
-    merged.editorUid = data.editorUid || '';
   }
   return merged;
 }
@@ -380,7 +368,18 @@ async function setRadioValue(frame, name, value) {
   }
 }
 
-async function selectBpmPerson(formFrame, selector, personName, fieldLabel) {
+async function verifyBpmPersonIdentity(formFrame, selector, idSelector, personName, fieldLabel) {
+  const selectedName = await readInputValue(formFrame, selector);
+  const selectedId = await readInputValue(formFrame, idSelector);
+  if (selectedName !== personName) {
+    throw new Error(`${fieldLabel}选择后姓名不匹配：期望“${personName}”，实际“${selectedName || '空'}”。`);
+  }
+  if (!String(selectedId || '').trim()) {
+    throw new Error(`${fieldLabel}选择后缺少隐藏人员 ID。`);
+  }
+}
+
+async function selectBpmPerson(formFrame, selector, idSelector, personName, fieldLabel) {
   if (!personName) return;
   const field = formFrame.locator(selector).first();
 
@@ -409,28 +408,53 @@ async function selectBpmPerson(formFrame, selector, personName, fieldLabel) {
     throw new Error(`BPM person picker could not find "${personName}" for ${fieldLabel}`);
   }
 
-  await personLink.click();
-  await formFrame.waitForFunction(
-    ({ fieldSelector, expected }) => document.querySelector(fieldSelector)?.value === expected,
-    { fieldSelector: selector, expected: personName },
-    { timeout: 15000 },
-  );
-  await picker.close().catch(() => {});
+  try {
+    await personLink.click();
+    await formFrame.waitForFunction(
+      ({ fieldSelector, hiddenIdSelector, expected }) => (
+        document.querySelector(fieldSelector)?.value === expected
+        && String(document.querySelector(hiddenIdSelector)?.value || '').trim()
+      ),
+      { fieldSelector: selector, hiddenIdSelector: idSelector, expected: personName },
+      { timeout: 15000 },
+    ).catch(() => {});
+    await verifyBpmPersonIdentity(formFrame, selector, idSelector, personName, fieldLabel);
+  } finally {
+    await picker.close().catch(() => {});
+  }
 }
 
-async function ensureEditorIdentity(formFrame, topic) {
-  const projectEditor = await readInputValue(formFrame, 'input[name="PRJEDITOR"]');
-  const projectEditorNo = await readInputValue(formFrame, 'input[name="PRJEDITORNO"]');
-  const editor = await readInputValue(formFrame, 'input[name="EDITOR"]');
-  const editorNo = await readInputValue(formFrame, 'input[name="EDITORNO"]');
-  if (
-    projectEditor === topic.projectEditor
-    && projectEditorNo
-    && editor === topic.editor
-    && editorNo
-  ) return;
-  await selectBpmPerson(formFrame, 'input[name="PRJEDITOR"]', topic.projectEditor, '策划编辑');
-  await selectBpmPerson(formFrame, 'input[name="EDITOR"]', topic.editor, '拟责任编辑');
+async function ensureBpmPersonIdentity(
+  formFrame,
+  selector,
+  idSelector,
+  personName,
+  fieldLabel,
+  selectPerson = selectBpmPerson,
+) {
+  const currentName = await readInputValue(formFrame, selector);
+  const currentId = await readInputValue(formFrame, idSelector);
+  if (currentName === personName && String(currentId || '').trim()) return;
+  await selectPerson(formFrame, selector, idSelector, personName, fieldLabel);
+}
+
+async function ensureEditorIdentity(formFrame, topic, selectPerson = selectBpmPerson) {
+  await ensureBpmPersonIdentity(
+    formFrame,
+    'input[name="PRJEDITOR"]',
+    'input[name="PRJEDITORNO"]',
+    topic.projectEditor,
+    '策划编辑',
+    selectPerson,
+  );
+  await ensureBpmPersonIdentity(
+    formFrame,
+    'input[name="EDITOR"]',
+    'input[name="EDITORNO"]',
+    topic.editor,
+    '拟责任编辑',
+    selectPerson,
+  );
 }
 
 async function expandDepartmentNode(departmentFrame, nodeText) {
@@ -731,9 +755,13 @@ async function openAuthorMaintenancePopup(page) {
 async function fillAuthorMaintenanceForm(formFrame, topic) {
   const author = topic.authorMaintenance || {};
   await selectOptionWhenReady(formFrame, 'select[name="AUTHORTYPE"]', author.type || '个人', { fallback: true });
-  await setInputValueIfExists(formFrame, 'input[name="CONTACTOR"]', author.contactor || topic.projectEditor);
-  await setInputValueIfExists(formFrame, 'input[name="CONTACTORUID"]', author.contactorUid || topic.projectEditorUid);
-  await setInputValueIfExists(formFrame, 'input[name="CONTACTORDEPID"]', author.contactorDeptId || '');
+  await ensureBpmPersonIdentity(
+    formFrame,
+    'input[name="CONTACTOR"]',
+    'input[name="CONTACTORUID"]',
+    author.contactor || topic.projectEditor,
+    '联系人',
+  );
   await setInputValueIfExists(formFrame, 'input[name="AUTHORNAME"]', author.name || topic.authorName);
   await selectOptionIfExists(formFrame, 'select[name="SEX"]', author.gender);
   await selectOptionIfExists(formFrame, 'select[name="IDTYPE"]', author.certificateType || '其他');
@@ -1419,6 +1447,8 @@ async function main() {
 }
 
 module.exports = {
+  ensureEditorIdentity,
+  selectBpmPerson,
   waitForSavedTopicLink,
 };
 

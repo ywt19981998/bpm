@@ -12,7 +12,11 @@ const scriptPath = path.join(
   'fill_topic.js',
 );
 const source = fs.readFileSync(scriptPath, 'utf8');
-const { waitForSavedTopicLink } = require(scriptPath);
+const {
+  ensureEditorIdentity,
+  selectBpmPerson,
+  waitForSavedTopicLink,
+} = require(scriptPath);
 
 function functionBody(name) {
   const start = source.indexOf(`async function ${name}(`);
@@ -67,22 +71,97 @@ test('BPM choices click visible labels and directly set hidden required choices'
 
 test('editor identity preserves BPM values or uses the person picker before save', () => {
   const identityBody = functionBody('ensureEditorIdentity');
+  const ensurePersonBody = functionBody('ensureBpmPersonIdentity');
   const pickerBody = functionBody('selectBpmPerson');
   const fillBody = functionBody('fillForm');
   const saveBody = functionBody('submitTopic');
-  let lastReadIndex = -1;
   for (const field of ['PRJEDITOR', 'PRJEDITORNO', 'EDITOR', 'EDITORNO']) {
-    assert.match(identityBody, new RegExp(`readInputValue\\(formFrame, ['"]input\\[name=["']${field}["']\\]['"]\\)`));
-    lastReadIndex = Math.max(lastReadIndex, identityBody.indexOf(`input[name="${field}"]`));
+    assert.match(identityBody, new RegExp(`input\\[name=["']${field}["']\\]`));
   }
-  assert.match(identityBody, /selectBpmPerson\(formFrame,\s*'input\[name="PRJEDITOR"\]',\s*topic\.projectEditor,\s*'策划编辑'\)/);
-  assert.match(identityBody, /selectBpmPerson\(formFrame,\s*'input\[name="EDITOR"\]',\s*topic\.editor,\s*'拟责任编辑'\)/);
-  assert.ok(lastReadIndex < identityBody.indexOf('selectBpmPerson('));
+  assert.match(identityBody, /ensureBpmPersonIdentity\([\s\S]*topic\.projectEditor[\s\S]*'策划编辑'/);
+  assert.match(identityBody, /ensureBpmPersonIdentity\([\s\S]*topic\.editor[\s\S]*'拟责任编辑'/);
+  assert.ok(ensurePersonBody.indexOf('readInputValue(formFrame, selector)') < ensurePersonBody.indexOf('selectPerson('));
+  assert.ok(ensurePersonBody.indexOf('readInputValue(formFrame, idSelector)') < ensurePersonBody.indexOf('selectPerson('));
   assert.doesNotMatch(pickerBody, /field\.inputValue\(\).*personName/);
+  assert.match(pickerBody, /verifyBpmPersonIdentity\(formFrame,\s*selector,\s*idSelector/);
   assert.match(fillBody, /ensureEditorIdentity\(formFrame,\s*topic\)/);
   assert.ok(saveBody.indexOf('fillForm(formFrame, topic)') < saveBody.indexOf('clickWorkflowSaveAndWait'));
   assert.doesNotMatch(fillBody, /setReadonlyInputValue\(formFrame,\s*'input\[name="(?:PRJEDITORNO|PRJEDITORUID|EDITORNO|EDITORUID)"\]'/);
   assert.match(source, /setReadonlyInputValue\(formFrame,\s*'input\[name="PRJDEPT"\]'/);
+});
+
+test('editor identity selects only the invalid field', async () => {
+  const cases = [
+    {
+      values: {
+        'input[name="PRJEDITOR"]': '张编辑',
+        'input[name="PRJEDITORNO"]': 'P1001',
+        'input[name="EDITOR"]': '旧编辑',
+        'input[name="EDITORNO"]': '',
+      },
+      expectedCalls: [[
+        'input[name="EDITOR"]',
+        'input[name="EDITORNO"]',
+        '张编辑',
+        '拟责任编辑',
+      ]],
+    },
+    {
+      values: {
+        'input[name="PRJEDITOR"]': '旧编辑',
+        'input[name="PRJEDITORNO"]': '',
+        'input[name="EDITOR"]': '张编辑',
+        'input[name="EDITORNO"]': 'E1001',
+      },
+      expectedCalls: [[
+        'input[name="PRJEDITOR"]',
+        'input[name="PRJEDITORNO"]',
+        '张编辑',
+        '策划编辑',
+      ]],
+    },
+    {
+      values: {
+        'input[name="PRJEDITOR"]': '张编辑',
+        'input[name="PRJEDITORNO"]': 'P1001',
+        'input[name="EDITOR"]': '张编辑',
+        'input[name="EDITORNO"]': 'E1001',
+      },
+      expectedCalls: [],
+    },
+  ];
+
+  for (const { values, expectedCalls } of cases) {
+    const calls = [];
+    await ensureEditorIdentity(
+      fakeInputFrame(values),
+      { projectEditor: '张编辑', editor: '张编辑' },
+      async (...args) => calls.push(args.slice(1)),
+    );
+    assert.deepEqual(calls, expectedCalls);
+  }
+});
+
+test('person picker fails when BPM does not populate the hidden person ID', async () => {
+  const nameSelector = 'input[name="EDITOR"]';
+  const idSelector = 'input[name="EDITORNO"]';
+  const formFrame = fakePickerFrame({
+    [nameSelector]: '张编辑',
+    [idSelector]: '',
+  });
+
+  await assert.rejects(
+    selectBpmPerson(formFrame, nameSelector, idSelector, '张编辑', '拟责任编辑'),
+    /拟责任编辑.*隐藏人员 ID/,
+  );
+});
+
+test('author maintenance never writes constructed contactor identifiers', () => {
+  const body = functionBody('fillAuthorMaintenanceForm');
+  assert.match(body, /ensureBpmPersonIdentity\(\s*formFrame,[\s\S]*CONTACTORUID/);
+  assert.doesNotMatch(body, /setInputValueIfExists\(formFrame,\s*'input\[name="CONTACTORUID"\]'/);
+  assert.doesNotMatch(body, /setInputValueIfExists\(formFrame,\s*'input\[name="CONTACTORDEPID"\]'/);
+  assert.doesNotMatch(source, /["']yewt["']/);
 });
 
 test('score grid updates Ext records and clicks its own save button', () => {
@@ -177,5 +256,76 @@ function createFakeWorklistFrame(titles) {
         },
       };
     },
+  };
+}
+
+function fakeInputFrame(values) {
+  return {
+    locator(selector) {
+      return {
+        first() {
+          return this;
+        },
+        async inputValue() {
+          return values[selector] || '';
+        },
+      };
+    },
+  };
+}
+
+function fakePickerFrame(values) {
+  const pickerButton = {
+    first() {
+      return this;
+    },
+    async click() {},
+  };
+  const row = {
+    locator() {
+      return pickerButton;
+    },
+  };
+  const candidate = {
+    async count() {
+      return 1;
+    },
+    first() {
+      return this;
+    },
+    async click() {},
+  };
+  const picker = {
+    async waitForLoadState() {},
+    frames() {
+      return [{ getByText() { return candidate; } }];
+    },
+    async waitForTimeout() {},
+    async close() {},
+  };
+  const context = {
+    async waitForEvent() {
+      return picker;
+    },
+  };
+
+  return {
+    locator(selector) {
+      return {
+        first() {
+          return this;
+        },
+        async inputValue() {
+          return values[selector] || '';
+        },
+        locator() {
+          return row;
+        },
+      };
+    },
+    page() {
+      return { context() { return context; } };
+    },
+    async waitForFunction() {},
   };
 }
