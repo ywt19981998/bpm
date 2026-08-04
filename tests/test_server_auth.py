@@ -1,9 +1,11 @@
 import http.client
+import io
 import json
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import server
 from app_storage import AppStore
@@ -71,6 +73,11 @@ class ServerAuthHttpTests(unittest.TestCase):
         self.assertEqual(status, 401)
         self.assertEqual(json.loads(body)["code"], "AUTH_REQUIRED")
 
+    def test_logout_requires_a_valid_session(self):
+        status, _, body = self.request("POST", "/api/auth/logout")
+        self.assertEqual(status, 401)
+        self.assertEqual(json.loads(body), {"error": "请先登录。", "code": "AUTH_REQUIRED"})
+
     def test_rejects_wrong_login(self):
         self.register()
         status, _, body = self.request(
@@ -85,6 +92,71 @@ class ServerAuthHttpTests(unittest.TestCase):
                 status, _, body = self.request(method, path, {})
                 self.assertEqual(status, 401)
                 self.assertEqual(json.loads(body), {"error": "请先登录。", "code": "AUTH_REQUIRED"})
+
+    def test_authenticated_requests_dispatch_to_every_existing_business_route(self):
+        self.register()
+        routes = (
+            ("/api/generate-report", "handle_generate_report", ()),
+            ("/api/import-bpm-sources", "handle_import_bpm_sources", ()),
+            ("/api/bpm-jobs", "handle_bpm_job", ("topic",)),
+            ("/api/bpm-topic-jobs", "handle_bpm_job", ("topic",)),
+            ("/api/bpm-author-jobs", "handle_bpm_job", ("author",)),
+            ("/api/bpm-submit", "handle_bpm_submit", ()),
+        )
+        for path, handler_name, expected_args in routes:
+            calls = []
+
+            def stub(request_handler, *args):
+                calls.append(args)
+                request_handler.send_json(200, {"route": path})
+
+            with self.subTest(path=path), patch.object(server.Handler, handler_name, stub):
+                status, _, body = self.request("POST", path, {}, cookie=self.cookie)
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(body), {"route": path})
+                self.assertEqual(calls, [expected_args])
+
+        export_path = Path(self.temp_dir.name) / "report.docx"
+        export_path.write_bytes(b"test-docx")
+        with patch("server.build_docx", return_value=export_path):
+            status, _, body = self.request("POST", "/api/export-docx", {}, cookie=self.cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "test-docx")
+
+        with patch("server.public_jobs", return_value=[]):
+            status, _, body = self.request("GET", "/api/bpm-jobs", cookie=self.cookie)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"jobs": []})
+
+
+class MultipartFormTests(unittest.TestCase):
+    def test_repeated_fields_keep_the_first_value_and_file(self):
+        boundary = "Task3Boundary"
+
+        def field(name, value, filename=None):
+            disposition = f'Content-Disposition: form-data; name="{name}"'
+            if filename:
+                disposition += f'; filename="{filename}"'
+            return f"--{boundary}\r\n{disposition}\r\n\r\n".encode("utf-8") + value + b"\r\n"
+
+        body = b"".join(
+            (
+                field("model", b"first-model"),
+                field("model", b"last-model"),
+                field("file", b"first-file", "first.docx"),
+                field("file", b"last-file", "last.docx"),
+                f"--{boundary}--\r\n".encode("utf-8"),
+            )
+        )
+        form = server.MultipartForm(
+            io.BytesIO(body),
+            {"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            {"CONTENT_LENGTH": str(len(body))},
+        )
+
+        self.assertEqual(form.getfirst("model"), "first-model")
+        self.assertEqual(form["file"].filename, "first.docx")
+        self.assertEqual(form["file"].file.read(), b"first-file")
 
 
 if __name__ == "__main__":

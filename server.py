@@ -61,7 +61,7 @@ class MultipartForm:
         self.fields = {}
         for part in message.iter_parts():
             name = part.get_param("name", header="content-disposition")
-            if not name:
+            if not name or name in self.fields:
                 continue
             content = part.get_payload(decode=True) or b""
             filename = part.get_filename()
@@ -1592,6 +1592,8 @@ class Handler(SimpleHTTPRequestHandler):
         self.send_json(200, {"user": self.public_user(user)}, self.session_cookie(token, 604800))
 
     def handle_auth_logout(self):
+        if not self.require_user():
+            return
         try:
             cookies = SimpleCookie(self.headers.get("Cookie", ""))
             morsel = cookies.get(SESSION_COOKIE_NAME)
