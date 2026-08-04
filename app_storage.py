@@ -160,7 +160,7 @@ class AppStore:
             try:
                 connection.execute(
                     "INSERT INTO sessions(user_id, token_hash, expires_at, created_at) VALUES (?, ?, ?, ?)",
-                    (user_id, hashlib.sha256(token.encode("ascii")).hexdigest(), now + ttl_seconds, now),
+                    (user_id, hashlib.sha256(token.encode("utf-8")).hexdigest(), now + ttl_seconds, now),
                 )
             except sqlite3.IntegrityError as error:
                 raise ValueError("user does not exist") from error
@@ -169,7 +169,7 @@ class AppStore:
     def get_user_for_session(self, token: str) -> dict | None:
         if not isinstance(token, str) or not token:
             return None
-        token_hash = hashlib.sha256(token.encode("ascii", "ignore")).hexdigest()
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -185,6 +185,6 @@ class AppStore:
     def delete_session(self, token: str) -> None:
         if not isinstance(token, str) or not token:
             return
-        token_hash = hashlib.sha256(token.encode("ascii", "ignore")).hexdigest()
+        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         with self.connect() as connection:
             connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))

@@ -64,6 +64,11 @@ class AppStoreAuthTests(unittest.TestCase):
         self.assertEqual(len(stored_token), 64)
         self.assertNotIn(token, self.db_path.read_bytes().decode("utf-8", "ignore"))
 
+    def test_token_with_unicode_suffix_does_not_resolve(self):
+        user = self.store.register_user("editor01", "S3cure-pass", "张编辑")
+        token = self.store.create_session(user["id"])
+        self.assertIsNone(self.store.get_user_for_session(token + "中文"))
+
 
 if __name__ == "__main__":
     unittest.main()
