@@ -251,6 +251,25 @@ class AppStoreJobTests(unittest.TestCase):
         self.assertEqual(self.store.list_jobs(self.user_id)[0]["status"], "queued")
         self.assertEqual(self.store.list_jobs(self.user_id)[0]["logs"], [])
 
+    def test_mark_interrupted_jobs_failed_atomically(self):
+        queued = self.store.create_job(self.user_id, "topic", "排队任务", {})
+        running = self.store.create_job(self.user_id, "author", "执行中任务", {})
+        completed = self.store.create_job(self.user_id, "topic", "完成任务", {})
+        self.store.update_job(running["id"], self.user_id, "running")
+        self.store.update_job(completed["id"], self.user_id, "succeeded", result={"ok": True})
+
+        changed = self.store.mark_interrupted_jobs_failed()
+
+        self.assertEqual(changed, 2)
+        jobs = {job["id"]: job for job in self.store.list_jobs(self.user_id)}
+        for job_id in (queued["id"], running["id"]):
+            self.assertEqual(jobs[job_id]["status"], "failed")
+            self.assertEqual(
+                jobs[job_id]["error"],
+                "服务重启，任务执行状态不确定，请先在 BPM 人工核对后再重试",
+            )
+        self.assertEqual(jobs[completed["id"]]["status"], "succeeded")
+
     def test_job_storage_redacts_sensitive_payload_results_errors_and_logs(self):
         secrets_to_scan = {
             "test-bpm-password",

@@ -391,6 +391,27 @@ async function verifyBpmPersonIdentity(
   }
 }
 
+async function findUniqueBpmPersonLink(picker, personName, fieldLabel, options = {}) {
+  const deadline = Date.now() + (options.timeoutMs ?? 30000);
+  do {
+    const matches = [];
+    for (const pickerFrame of picker.frames()) {
+      const candidate = pickerFrame.getByText(personName, { exact: true });
+      const count = await candidate.count();
+      for (let index = 0; index < count; index += 1) {
+        matches.push(candidate.nth(index));
+      }
+    }
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) {
+      throw new Error(`${fieldLabel}人员选择器找到多个同名结果“${personName}”，需要人工确认或提供更精确识别。`);
+    }
+    if (Date.now() >= deadline) break;
+    await picker.waitForTimeout(options.pollMs ?? 500);
+  } while (Date.now() < deadline);
+  throw new Error(`${fieldLabel}人员选择器找不到“${personName}”，需要人工确认或提供更精确识别。`);
+}
+
 async function selectBpmPerson(formFrame, selector, hiddenIdSelectors, personName, fieldLabel) {
   if (!personName) return;
   const requiredIdSelectors = Array.isArray(hiddenIdSelectors) ? hiddenIdSelectors : [hiddenIdSelectors];
@@ -405,20 +426,11 @@ async function selectBpmPerson(formFrame, selector, hiddenIdSelectors, personNam
   await picker.waitForLoadState('domcontentloaded');
 
   let personLink = null;
-  const deadline = Date.now() + 30000;
-  while (!personLink && Date.now() < deadline) {
-    for (const pickerFrame of picker.frames()) {
-      const candidate = pickerFrame.getByText(personName, { exact: true });
-      if (await candidate.count()) {
-        personLink = candidate.first();
-        break;
-      }
-    }
-    if (!personLink) await picker.waitForTimeout(500);
-  }
-  if (!personLink) {
+  try {
+    personLink = await findUniqueBpmPersonLink(picker, personName, fieldLabel);
+  } catch (error) {
     await picker.close().catch(() => {});
-    throw new Error(`BPM person picker could not find "${personName}" for ${fieldLabel}`);
+    throw error;
   }
 
   try {
@@ -1475,6 +1487,7 @@ async function main() {
 
 module.exports = {
   ensureEditorIdentity,
+  findUniqueBpmPersonLink,
   selectBpmPerson,
   waitForSavedTopicLink,
 };

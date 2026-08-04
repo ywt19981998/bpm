@@ -6,7 +6,7 @@
   <title>选题策划报告工作台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23d9f0ed'/%3E%3Cpath d='M10 7h9l4 4v14H10z' fill='none' stroke='%230f766e' stroke-width='2'/%3E%3Cpath d='M19 7v5h5M13 16h7M13 20h7' stroke='%230f766e' stroke-width='2'/%3E%3C/svg%3E">
   <script src="auth_session_generation.js"></script>
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <script src="vendor/lucide-0.468.0.min.js"></script>
   <style>
     :root {
       --page: #f6f7f6;
@@ -1467,25 +1467,41 @@
       return form.querySelector('button[type="submit"]');
     }
 
-    function resetAuthForms() {
-      authBusy.reset();
+    function setAuthControlsDisabled(disabled) {
       [loginForm, registerForm].forEach((form) => {
-        authSubmitButton(form).disabled = false;
+        authSubmitButton(form).disabled = disabled;
+        form.querySelectorAll("input").forEach((input) => {
+          input.disabled = disabled;
+        });
+      });
+      document.querySelectorAll("[data-auth-mode]").forEach((button) => {
+        button.disabled = disabled;
+      });
+    }
+
+    function resetAuthForms() {
+      if (authBusy.isBusy()) {
+        setAuthControlsDisabled(true);
+        return;
+      }
+      setAuthControlsDisabled(false);
+      [loginForm, registerForm].forEach((form) => {
         form.removeAttribute("aria-busy");
       });
     }
 
     function beginAuthSubmission(form) {
       const busy = authBusy.begin(form.id);
-      authSubmitButton(form).disabled = true;
+      if (!busy) return null;
+      setAuthControlsDisabled(true);
       form.setAttribute("aria-busy", "true");
       return busy;
     }
 
     function finishAuthSubmission(form, busy) {
       if (!authBusy.finish(busy)) return false;
-      authSubmitButton(form).disabled = false;
-      form.removeAttribute("aria-busy");
+      setAuthControlsDisabled(false);
+      [loginForm, registerForm].forEach((authForm) => authForm.removeAttribute("aria-busy"));
       return true;
     }
 
@@ -1704,7 +1720,10 @@
       }
     }
 
-    async function loadCurrentUser(session = beginSessionRestore()) {
+    async function loadCurrentUser(session) {
+      if (authBusy.isBusy()) return;
+      session = session || beginSessionRestore();
+      if (authBusy.isBusy()) return;
       try {
         const response = await apiFetch("/api/auth/me", { cache: "no-store", session });
         if (!isCurrentSession(session)) return;
@@ -1715,7 +1734,7 @@
         }
         const data = await response.json();
         if (!isCurrentSession(session)) return;
-        if (!data.user) throw new Error("无法恢复登录状态");
+        if (!data.user || authBusy.isBusy()) throw new Error("无法恢复登录状态");
         showWorkspace(data.user);
       } catch (error) {
         if (isCurrentSession(session)) showAuthView("login");
@@ -1723,8 +1742,9 @@
     }
 
     async function submitAuthForm(form, errorElement, endpoint, payload) {
-      const session = authSession.clear();
       const busy = beginAuthSubmission(form);
+      if (!busy) return;
+      const session = authSession.clear();
       setAuthError(errorElement);
       try {
         const response = await apiFetch(endpoint, {
@@ -2271,6 +2291,7 @@
 
     document.querySelectorAll("[data-auth-mode]").forEach((button) => {
       button.addEventListener("click", () => {
+        if (authBusy.isBusy()) return;
         setAuthError(loginError);
         setAuthError(registerError);
         showAuthView(button.dataset.authMode);

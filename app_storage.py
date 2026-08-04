@@ -21,6 +21,7 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 SCRYPT_DKLEN = 32
 JOB_STATUSES = {"queued", "running", "succeeded", "failed"}
+INTERRUPTED_JOB_ERROR = "服务重启，任务执行状态不确定，请先在 BPM 人工核对后再重试"
 JOB_RESERVED_PAYLOAD_KEYS = {
     "id",
     "type",
@@ -223,6 +224,13 @@ class AppStore:
             raise ValueError("username is already registered") from error
         return {"id": user_id, "username": normalized, "display_name": display_name.strip()}
 
+    def get_user_by_id(self, user_id: int) -> dict | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT id, username, display_name FROM users WHERE id = ?", (user_id,)
+            ).fetchone()
+        return None if row is None else self._row_to_user(row)
+
     def authenticate_user(self, username: str, password: str) -> dict | None:
         try:
             normalized = self._normalize_username(username)
@@ -356,6 +364,18 @@ class AppStore:
         if not isinstance(credentials, dict) or not {"account", "password"} <= credentials.keys():
             raise CredentialConfigurationError("integration credentials payload is invalid")
         return {"account": credentials["account"], "password": credentials["password"]}
+
+    def has_integration_credentials(self, user_id: int, system_type: str) -> bool:
+        self._credential_key()
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT 1 FROM integration_credentials
+                WHERE user_id = ? AND system_type = ?
+                """,
+                (user_id, system_type),
+            ).fetchone()
+        return row is not None
 
     def get_integration_status(self, user_id: int, system_type: str) -> dict:
         self._credential_key()
@@ -548,6 +568,20 @@ class AppStore:
                     user_id,
                 ),
             )
+
+    def mark_interrupted_jobs_failed(self) -> int:
+        now = self._job_timestamp()
+        with self.connect() as connection:
+            result = connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'failed', result_json = NULL, error_summary = ?,
+                    updated_at = ?, finished_at = ?
+                WHERE status IN ('queued', 'running')
+                """,
+                (INTERRUPTED_JOB_ERROR, now, now),
+            )
+        return result.rowcount
 
     def append_job_log(self, job_id: str, user_id: int, message: str) -> None:
         if not isinstance(message, str) or not message.strip():

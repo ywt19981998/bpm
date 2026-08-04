@@ -110,7 +110,7 @@ test("async workspace operations capture and verify the active session generatio
   assert.match(source, /function isCurrentSession\(snapshot\)/);
   assert.match(source, /function showAuthView\([^)]*\)[\s\S]*authSession\.clear\(\)/);
   assert.match(source, /function showWorkspace\(user\)[\s\S]*authSession\.activate\(user\)/);
-  assert.match(source, /async function loadCurrentUser\(session = beginSessionRestore\(\)\)/);
+  assert.match(source, /async function loadCurrentUser\(session\)/);
   assert.match(source, /async function refreshBpmJobs\(session = captureSession\(\)\)/);
   assert.match(source, /const session = captureSession\(\);[\s\S]*await assertBackendReady\(session\)/);
   assert.match(source, /if \(!isCurrentSession\(session\)\) return;/);
@@ -122,9 +122,19 @@ test("async workspace operations capture and verify the active session generatio
 
 test("auth view changes reset form busy state while stale submissions cannot restore it", () => {
   assert.match(source, /const authBusy = new AuthBusyState\(\)/);
-  assert.match(source, /function resetAuthForms\(\)[\s\S]*authBusy\.reset\(\)[\s\S]*authSubmitButton\(form\)\.disabled = false[\s\S]*removeAttribute\("aria-busy"\)/);
-  assert.match(source, /function showAuthView\([^)]*\)[\s\S]*resetAuthForms\(\)/);
-  assert.match(source, /function showWorkspace\([^)]*\)[\s\S]*resetAuthForms\(\)/);
+  assert.match(source, /function setAuthControlsDisabled\(disabled\)/);
+  assert.match(source, /\[loginForm, registerForm\][\s\S]*authSubmitButton\(form\)\.disabled = disabled/);
+  assert.match(source, /document\.querySelectorAll\("\[data-auth-mode\]"\)[\s\S]*button\.disabled = disabled/);
   assert.match(source, /const busy = beginAuthSubmission\(form\)/);
+  assert.match(source, /if \(!busy\) return;/);
+  assert.match(source, /setAuthControlsDisabled\(true\)/);
   assert.match(source, /finishAuthSubmission\(form, busy\)/);
+  assert.match(source, /async function loadCurrentUser[\s\S]*authBusy\.isBusy\(\)/);
+});
+
+test("loads only local fixed-version scripts and keeps Lucide initialization", () => {
+  assert.doesNotMatch(source, /<script[^>]+src=["']https?:\/\//i);
+  assert.doesNotMatch(source, /@latest/i);
+  assert.match(source, /src="vendor\/lucide-0\.468\.0\.min\.js"/);
+  assert.match(source, /window\.lucide\.createIcons\(\)/);
 });

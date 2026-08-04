@@ -44,27 +44,28 @@ class AuthSessionGeneration {
 class AuthBusyState {
   constructor() {
     this.generation = 0;
-    this.busyForms = new Set();
+    this.active = null;
   }
 
   begin(formId) {
-    this.busyForms.add(formId);
-    return { generation: this.generation, formId };
+    if (this.active) return null;
+    this.active = { generation: this.generation, formId };
+    return this.active;
   }
 
   finish(snapshot) {
-    if (!snapshot || snapshot.generation !== this.generation) return false;
-    this.busyForms.delete(snapshot.formId);
+    if (!snapshot || snapshot.generation !== this.generation || this.active !== snapshot) return false;
+    this.active = null;
     return true;
   }
 
   reset() {
     this.generation += 1;
-    this.busyForms.clear();
+    this.active = null;
   }
 
-  isBusy(formId) {
-    return this.busyForms.has(formId);
+  isBusy() {
+    return Boolean(this.active);
   }
 }
 

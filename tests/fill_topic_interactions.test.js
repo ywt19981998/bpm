@@ -14,6 +14,7 @@ const scriptPath = path.join(
 const source = fs.readFileSync(scriptPath, 'utf8');
 const {
   ensureEditorIdentity,
+  findUniqueBpmPersonLink,
   selectBpmPerson,
   waitForSavedTopicLink,
 } = require(scriptPath);
@@ -186,6 +187,25 @@ test('person picker fails when BPM does not populate the hidden person ID', asyn
   );
 });
 
+test('person picker fails closed for zero or multiple exact-name matches', async () => {
+  await assert.rejects(
+    findUniqueBpmPersonLink(fakePersonPicker(0), '张编辑', '拟责任编辑', { timeoutMs: 0 }),
+    /找不到.*张编辑/,
+  );
+  await assert.rejects(
+    findUniqueBpmPersonLink(fakePersonPicker(2), '张编辑', '拟责任编辑', { timeoutMs: 0 }),
+    /多个同名结果.*人工确认/,
+  );
+});
+
+test('person picker clicks the only exact-name match', async () => {
+  const personLink = await findUniqueBpmPersonLink(
+    fakePersonPicker(1), '张编辑', '拟责任编辑', { timeoutMs: 0 },
+  );
+  await personLink.click();
+  assert.equal(personLink.clicked, true);
+});
+
 test('author maintenance never writes constructed contactor identifiers', () => {
   const body = functionBody('fillAuthorMaintenanceForm');
   assert.match(body, /ensureBpmPersonIdentity\(\s*formFrame,[\s\S]*CONTACTORUID/);
@@ -320,7 +340,7 @@ function fakePickerFrame(values) {
     async count() {
       return 1;
     },
-    first() {
+    nth() {
       return this;
     },
     async click() {},
@@ -357,5 +377,31 @@ function fakePickerFrame(values) {
       return { context() { return context; } };
     },
     async waitForFunction() {},
+  };
+}
+
+function fakePersonPicker(matchCount) {
+  const links = Array.from({ length: matchCount }, () => ({
+    clicked: false,
+    async click() {
+      this.clicked = true;
+    },
+  }));
+  return {
+    frames() {
+      return [{
+        getByText() {
+          return {
+            async count() {
+              return links.length;
+            },
+            nth(index) {
+              return links[index];
+            },
+          };
+        },
+      }];
+    },
+    async waitForTimeout() {},
   };
 }

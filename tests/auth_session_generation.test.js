@@ -41,24 +41,21 @@ test("invalidates concurrent auth restoration when a newer user becomes active",
   assert.equal(session.isCurrent(session.capture()), true);
 });
 
-test("cancelling auth resets both forms and ignores the stale request finally", async () => {
+test("serializes authentication so a delayed request cannot start a second login", async () => {
   const busy = new AuthBusyState();
-  const pendingLogin = busy.begin("loginForm");
-  const delayedLogin = deferred();
-  const finishLogin = delayedLogin.promise.finally(() => busy.finish(pendingLogin));
+  const pendingA = busy.begin("loginForm");
+  const delayedA = deferred();
+  const finishA = delayedA.promise.finally(() => busy.finish(pendingA));
 
-  assert.equal(busy.isBusy("loginForm"), true);
+  assert.ok(pendingA);
+  assert.equal(busy.begin("registerForm"), null);
+  assert.equal(busy.isBusy(), true);
 
-  busy.reset();
-  assert.equal(busy.isBusy("loginForm"), false);
-  assert.equal(busy.isBusy("registerForm"), false);
+  delayedA.resolve();
+  await finishA;
 
-  const pendingRegister = busy.begin("registerForm");
-  delayedLogin.resolve();
-  await finishLogin;
-
-  assert.equal(busy.isBusy("loginForm"), false);
-  assert.equal(busy.isBusy("registerForm"), true);
-  assert.equal(busy.finish(pendingRegister), true);
-  assert.equal(busy.isBusy("registerForm"), false);
+  const pendingB = busy.begin("registerForm");
+  assert.ok(pendingB);
+  assert.equal(busy.finish(pendingB), true);
+  assert.equal(busy.isBusy(), false);
 });

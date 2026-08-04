@@ -39,11 +39,14 @@ test('worker dispatches jobs by explicit type', () => {
 test('BPM jobs use authenticated server-side credentials', () => {
   const createJobBody = functionBody('create_bpm_job');
   const trustedPayloadBody = functionBody('trusted_bpm_payload');
+  const processJobBody = functionBody('process_bpm_job');
   assert.match(trustedPayloadBody, /get_integration_credentials\(user\["id"\],\s*"phei_bpm"\)/);
-  assert.match(trustedPayloadBody, /trusted_payload\s*=\s*deepcopy\(payload\)/);
   assert.doesNotMatch(createJobBody, /credentials\s*=\s*payload\.get\("bpm"\)/);
-  assert.match(createJobBody, /trusted_bpm_payload\(payload,\s*user\)/);
-  assert.match(createJobBody, /JOB_QUEUE\.put\(\(job_id,\s*user_id,\s*job_type,\s*trusted_payload\)\)/);
+  assert.doesNotMatch(createJobBody, /trusted_bpm_payload\(payload,\s*user\)/);
+  assert.match(createJobBody, /JOB_QUEUE\.put\(\(job_id,\s*user_id,\s*job_type,\s*business_payload\)\)/);
+  assert.match(processJobBody, /APP_STORE\.get_user_by_id\(user_id\)/);
+  assert.match(processJobBody, /trusted_bpm_payload\(payload,\s*user\)/);
+  assert.match(processJobBody, /finally:[\s\S]*clear_bpm_job_password\(trusted_payload\)/);
 });
 
 test('server does not synthesize BPM person identifiers from display names', () => {

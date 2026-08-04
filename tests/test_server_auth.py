@@ -41,7 +41,7 @@ class ServerAuthHttpTests(unittest.TestCase):
         connection = http.client.HTTPConnection("127.0.0.1", self.httpd.server_port)
         connection.request(method, path, body=body, headers=headers)
         response = connection.getresponse()
-        result = response.status, dict(response.getheaders()), response.read().decode("utf-8")
+        result = response.status, dict(response.getheaders()), response.read().decode("utf-8", "replace")
         connection.close()
         return result
 
@@ -95,6 +95,52 @@ class ServerAuthHttpTests(unittest.TestCase):
                 status, _, body = self.request(method, path, {})
                 self.assertEqual(status, 401)
                 self.assertEqual(json.loads(body), {"error": "请先登录。", "code": "AUTH_REQUIRED"})
+
+    def test_static_allowlist_blocks_runtime_data_and_repository_files(self):
+        for path in (
+            "/.env",
+            "/data/app.db",
+            "/server.py",
+            "/README.md",
+            "/output/bpm-runs/topic.json",
+            "/backups/app.db",
+        ):
+            with self.subTest(path=path):
+                status, _, _ = self.request("GET", path)
+                self.assertIn(status, {403, 404})
+
+        for path in (
+            "/",
+            "/index.html",
+            "/auth_session_generation.js",
+            "/vendor/lucide-0.468.0.min.js",
+            "/assets/report-preview.png",
+        ):
+            with self.subTest(path=path):
+                status, _, _ = self.request("GET", path)
+                self.assertEqual(status, 200)
+
+    def test_export_uses_the_authenticated_users_name_not_forged_fields(self):
+        self.register()
+        export_path = Path(self.temp_dir.name) / "report.docx"
+        export_path.write_bytes(b"test-docx")
+        forged_payload = {
+            "title": "署名测试",
+            "editorName": "客户端伪造编辑",
+            "createdBy": "客户端伪造发起人",
+            "sections": [],
+            "scores": [],
+        }
+        with patch("server.build_docx", return_value=export_path) as build:
+            status, _, body = self.request(
+                "POST", "/api/export-docx", forged_payload, cookie=self.cookie
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, "test-docx")
+        built_payload = build.call_args.args[0]
+        self.assertEqual(built_payload["editorName"], "张编辑")
+        self.assertEqual(built_payload["createdBy"], "张编辑")
 
     def test_authenticated_requests_dispatch_to_every_existing_business_route(self):
         self.register()
@@ -455,6 +501,96 @@ class ServerJobHttpTests(unittest.TestCase):
         self.assertEqual(status, 201)
         return headers["Set-Cookie"].split(";", 1)[0]
 
+    @staticmethod
+    def valid_topic_payload():
+        return {
+            "title": "队列测试选题",
+            "editorName": "客户端伪造编辑",
+            "bpm": {"user": "client-account", "password": "client-secret"},
+            "sections": [
+                {"key": f"section-{index}", "text": "已确认正文", "confirmed": True}
+                for index in range(6)
+            ],
+            "bpmTopic": {"bookName": "队列测试选题"},
+        }
+
+    def current_user(self):
+        return server.APP_STORE.get_user_for_session(self.cookie.split("=", 1)[1])
+
+    def test_queued_item_keeps_only_business_payload_without_bpm_credentials(self):
+        user = self.current_user()
+        server.APP_STORE.put_integration_credentials(
+            user["id"], "phei_bpm", "stored-account", "stored-secret"
+        )
+        work_queue = queue.Queue()
+        with patch.object(server, "JOB_QUEUE", work_queue):
+            job = server.create_bpm_job(self.valid_topic_payload(), user)
+
+        item = work_queue.get_nowait()
+        self.assertEqual(item[:3], (job["id"], user["id"], "topic"))
+        self.assertNotIn("bpm", item[3])
+        self.assertNotIn("client-secret", json.dumps(item[3], ensure_ascii=False))
+        self.assertNotIn("stored-secret", json.dumps(item[3], ensure_ascii=False))
+
+    def test_worker_reads_updated_credentials_only_when_the_job_starts(self):
+        user = self.current_user()
+        server.APP_STORE.put_integration_credentials(
+            user["id"], "phei_bpm", "old-account", "old-secret"
+        )
+        job = server.APP_STORE.create_job(user["id"], "topic", "执行时更新", {})
+        server.APP_STORE.put_integration_credentials(
+            user["id"], "phei_bpm", "new-account", "new-secret"
+        )
+        work_queue = queue.Queue()
+        work_queue.put((job["id"], user["id"], "topic", {"title": "执行时更新"}))
+        stop_event = threading.Event()
+
+        captured_payloads = []
+
+        def submit(payload):
+            captured_payloads.append(json.loads(json.dumps(payload, ensure_ascii=False)))
+            return {"title": "执行时更新"}
+
+        with patch("server.run_bpm_topic_submit", side_effect=submit) as submit_mock:
+            worker = threading.Thread(
+                target=server.bpm_job_worker, args=(work_queue, stop_event), daemon=True
+            )
+            worker.start()
+            work_queue.join()
+            stop_event.set()
+            worker.join(timeout=2)
+
+        trusted_payload = captured_payloads[0]
+        self.assertEqual(trusted_payload["editorName"], "张编辑")
+        self.assertEqual(trusted_payload["bpm"]["user"], "new-account")
+        self.assertEqual(trusted_payload["bpm"]["password"], "new-secret")
+        self.assertNotIn("password", submit_mock.call_args.args[0]["bpm"])
+
+    def test_worker_fails_queued_job_when_credentials_are_deleted_before_execution(self):
+        user = self.current_user()
+        server.APP_STORE.put_integration_credentials(
+            user["id"], "phei_bpm", "stored-account", "stored-secret"
+        )
+        job = server.APP_STORE.create_job(user["id"], "topic", "配置已删除", {})
+        server.APP_STORE.delete_integration_credentials(user["id"], "phei_bpm")
+        work_queue = queue.Queue()
+        work_queue.put((job["id"], user["id"], "topic", {"title": "配置已删除"}))
+        stop_event = threading.Event()
+
+        with patch("server.run_bpm_topic_submit") as submit:
+            worker = threading.Thread(
+                target=server.bpm_job_worker, args=(work_queue, stop_event), daemon=True
+            )
+            worker.start()
+            work_queue.join()
+            stop_event.set()
+            worker.join(timeout=2)
+
+        submit.assert_not_called()
+        failed = next(item for item in server.APP_STORE.list_jobs(user["id"]) if item["id"] == job["id"])
+        self.assertEqual(failed["status"], "failed")
+        self.assertIn("请先保存 BPM 账号和密码", failed["error"])
+
     def test_jobs_are_isolated_and_survive_replacing_the_app_store(self):
         first_user = server.APP_STORE.get_user_for_session(self.cookie.split("=", 1)[1])
         job = server.APP_STORE.create_job(
@@ -472,6 +608,9 @@ class ServerJobHttpTests(unittest.TestCase):
 
     def test_worker_continues_after_storage_failures_and_completes_next_job(self):
         user = server.APP_STORE.get_user_for_session(self.cookie.split("=", 1)[1])
+        server.APP_STORE.put_integration_credentials(
+            user["id"], "phei_bpm", "stored-account", "stored-secret"
+        )
         first = server.APP_STORE.create_job(user["id"], "topic", "第一任务", {})
         second = server.APP_STORE.create_job(user["id"], "topic", "第二任务", {})
         work_queue = queue.Queue()
@@ -516,6 +655,9 @@ class ServerJobHttpTests(unittest.TestCase):
 
     def test_worker_survives_malformed_bpm_payload_cleanup_and_completes_next_job(self):
         user = server.APP_STORE.get_user_for_session(self.cookie.split("=", 1)[1])
+        server.APP_STORE.put_integration_credentials(
+            user["id"], "phei_bpm", "stored-account", "stored-secret"
+        )
         malformed = server.APP_STORE.create_job(user["id"], "topic", "畸形任务", {})
         next_job = server.APP_STORE.create_job(user["id"], "topic", "后续任务", {})
         work_queue = queue.Queue()

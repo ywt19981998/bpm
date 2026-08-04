@@ -20,7 +20,7 @@ import threading
 import uuid
 from copy import deepcopy
 from datetime import date, datetime, timedelta
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 from urllib.parse import quote, unquote, urlparse
@@ -46,7 +46,18 @@ APP_STORE = AppStore(
     Path(os.environ.get("PHEI_DB_PATH", ROOT / "data" / "app.db")),
     os.environ.get("APP_CREDENTIAL_KEY", ""),
 )
+APP_STORE.mark_interrupted_jobs_failed()
 SESSION_COOKIE_NAME = "phei_session"
+STATIC_ASSETS = {
+    "/": ("index.html", "text/html; charset=utf-8"),
+    "/index.html": ("index.html", "text/html; charset=utf-8"),
+    "/auth_session_generation.js": ("auth_session_generation.js", "application/javascript; charset=utf-8"),
+    "/vendor/lucide-0.468.0.min.js": (
+        "vendor/lucide-0.468.0.min.js",
+        "application/javascript; charset=utf-8",
+    ),
+    "/assets/report-preview.png": ("assets/report-preview.png", "image/png"),
+}
 
 
 class MultipartForm:
@@ -1027,19 +1038,52 @@ def trusted_bpm_payload(payload: dict, user: dict) -> tuple[dict, dict]:
     return trusted_payload, credentials
 
 
+def business_bpm_payload(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("BPM 请求体必须是对象。")
+    sensitive_keys = {
+        "bpm",
+        "credentials",
+        "bpmcredentials",
+        "password",
+        "bpmpassword",
+        "bpm_password",
+    }
+
+    def remove_sensitive(value):
+        if isinstance(value, list):
+            return [remove_sensitive(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+        return {
+            key: remove_sensitive(item)
+            for key, item in value.items()
+            if str(key).replace("-", "").replace("_", "").lower() not in sensitive_keys
+        }
+
+    business_payload = remove_sensitive(deepcopy(payload))
+    business_payload.pop("editorName", None)
+    business_payload.pop("createdBy", None)
+    return business_payload
+
+
 def create_bpm_job(payload: dict, user: dict, job_type: str = "topic") -> dict:
     if job_type not in {"topic", "author"}:
         raise ValueError(f"不支持的 BPM 任务类型：{job_type}")
-    trusted_payload, _ = trusted_bpm_payload(payload, user)
-    topic = merge_bpm_topic(trusted_payload)
+    business_payload = business_bpm_payload(payload)
+    if not APP_STORE.has_integration_credentials(user["id"], "phei_bpm"):
+        raise ValueError("请先保存 BPM 账号和密码。")
+    validation_payload = deepcopy(business_payload)
+    validation_payload["editorName"] = user["display_name"]
+    topic = merge_bpm_topic(validation_payload)
     if job_type == "topic":
-        sections = trusted_payload.get("sections") or []
+        sections = validation_payload.get("sections") or []
         if len(sections) < 6 or any(not section.get("text") for section in sections):
             raise ValueError("请先生成完整的一到六部分报告内容。")
         unconfirmed = [section for section in sections if not section.get("confirmed")]
         if unconfirmed:
             raise ValueError(f"还有 {len(unconfirmed)} 段未确认，不能加入 BPM 队列。")
-        job_title = topic.get("bookName") or trusted_payload.get("title") or "选题策划报告"
+        job_title = topic.get("bookName") or validation_payload.get("title") or "选题策划报告"
         job_label = "选题填报"
     else:
         author = topic.get("authorMaintenance") if isinstance(topic.get("authorMaintenance"), dict) else {}
@@ -1062,7 +1106,7 @@ def create_bpm_job(payload: dict, user: dict, job_type: str = "topic") -> dict:
     )
     job_id = job["id"]
     APP_STORE.append_job_log(job_id, user_id, f"已加入{job_label}队列")
-    JOB_QUEUE.put((job_id, user_id, job_type, trusted_payload))
+    JOB_QUEUE.put((job_id, user_id, job_type, business_payload))
     return APP_STORE.list_jobs(user_id, limit=1)[0]
 
 
@@ -1088,11 +1132,22 @@ def append_bpm_job_log(job_id: str, user_id: int, message: str):
 
 def process_bpm_job(job_id: str, user_id: int, job_type: str, payload: dict):
     job_label = "作译者维护" if job_type == "author" else "选题填报"
-    password = payload.get("bpm", {}).get("password", "")
+    password = ""
+    trusted_payload = {}
+    credentials = {}
     update_bpm_job(job_id, user_id, "running")
-    append_bpm_job_log(job_id, user_id, f"开始登录 BPM 并执行{job_label}")
     try:
-        result = run_bpm_author_submit(payload) if job_type == "author" else run_bpm_topic_submit(payload)
+        user = APP_STORE.get_user_by_id(user_id)
+        if not user:
+            raise ValueError("当前用户不存在，不能执行 BPM 任务。")
+        trusted_payload, credentials = trusted_bpm_payload(payload, user)
+        password = credentials.get("password", "")
+        append_bpm_job_log(job_id, user_id, f"开始登录 BPM 并执行{job_label}")
+        result = (
+            run_bpm_author_submit(trusted_payload)
+            if job_type == "author"
+            else run_bpm_topic_submit(trusted_payload)
+        )
         public_result = redact_bpm_secret(result, password)
         update_bpm_job(job_id, user_id, "succeeded", result=public_result)
         title = result.get("authorName") or result.get("title") or result.get("expectedBookName") or job_label
@@ -1101,6 +1156,10 @@ def process_bpm_job(job_id: str, user_id: int, job_type: str, payload: dict):
         error_summary = redact_bpm_secret(str(error), password)
         update_bpm_job(job_id, user_id, "failed", error_summary=error_summary)
         append_bpm_job_log(job_id, user_id, f"{job_label}失败：{error_summary}")
+    finally:
+        clear_bpm_job_password(trusted_payload)
+        if isinstance(credentials, dict):
+            credentials.clear()
 
 
 def clear_bpm_job_password(payload):
@@ -1544,10 +1603,7 @@ def generate_report_from_upload(file_bytes: bytes, filename: str) -> dict:
             pass
 
 
-class Handler(SimpleHTTPRequestHandler):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, directory=str(ROOT), **kwargs)
-
+class Handler(BaseHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
@@ -1563,6 +1619,24 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_header("Set-Cookie", session_cookie)
         self.end_headers()
         self.wfile.write(body)
+
+    def serve_static(self, path: str, include_body: bool = True):
+        asset = STATIC_ASSETS.get(path)
+        if asset is None:
+            self.send_error(404)
+            return
+        relative_path, content_type = asset
+        try:
+            data = (ROOT / relative_path).read_bytes()
+        except OSError:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if include_body:
+            self.wfile.write(data)
 
     def read_json(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
@@ -1693,7 +1767,11 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/bpm-jobs":
             self.send_json(200, {"jobs": APP_STORE.list_jobs(user["id"])})
             return
-        super().do_GET()
+        self.serve_static(path)
+
+    def do_HEAD(self):
+        path = unquote(self.path.split("?", 1)[0])
+        self.serve_static(path, include_body=False)
 
     def do_PUT(self):
         path = unquote(self.path.split("?", 1)[0])
@@ -1726,8 +1804,11 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/auth/logout":
             self.handle_auth_logout()
             return
-        if path.startswith("/api/") and not self.require_user():
-            return
+        user = None
+        if path.startswith("/api/"):
+            user = self.require_user()
+            if not user:
+                return
         if path == "/api/generate-report":
             self.handle_generate_report()
             return
@@ -1747,8 +1828,9 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_error(404)
             return
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            payload = self.read_json()
+            payload["editorName"] = user["display_name"]
+            payload["createdBy"] = user["display_name"]
             out = build_docx(payload)
             data = out.read_bytes()
             filename = out.name
