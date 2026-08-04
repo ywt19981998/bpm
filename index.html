@@ -1428,7 +1428,6 @@
     let bpmTopic = null;
     let authorMaintenance = null;
     let currentUser = null;
-    const draftKey = "phei-report-draft-v2";
     const tabs = document.getElementById("tabs");
     const sectionTitle = document.getElementById("sectionTitle");
     const sectionSub = document.getElementById("sectionSub");
@@ -1475,8 +1474,84 @@
       element.hidden = !message;
     }
 
+    function draftStorageKey(user) {
+      return `phei-report-draft-v3:${user.id}`;
+    }
+
+    function resetFileInput(id) {
+      document.getElementById(id).value = "";
+    }
+
+    function clearWorkspaceState() {
+      activeIndex = 0;
+      uploadedFile = null;
+      quickApplicationFile = null;
+      quickReportFile = null;
+      docxExported = false;
+      bpmTopic = null;
+      authorMaintenance = null;
+      sections.forEach((section) => {
+        section.text = "";
+        section.confirmed = false;
+      });
+      scoreItems.forEach((item) => {
+        item[2] = 0;
+      });
+      ["fileInput", "quickApplicationInput", "quickReportInput"].forEach(resetFileInput);
+      document.getElementById("fileName").textContent = "请上传选题申报表 .docx";
+      document.getElementById("fileState").textContent = "等待上传";
+      document.getElementById("quickApplicationName").textContent = "选择选题申报表 .docx";
+      document.getElementById("quickApplicationState").textContent = "提供作者和基础字段";
+      document.getElementById("quickReportName").textContent = "选择选题策划报告 .docx";
+      document.getElementById("quickReportState").textContent = "提供一到六正文和评分";
+      document.getElementById("projectName").textContent = "新建选题";
+      document.getElementById("projectMeta").textContent = "等待上传选题申报表";
+      document.getElementById("bpmUser").value = "";
+      document.getElementById("bpmPassword").value = "";
+      document.getElementById("bpmEditorName").value = document.getElementById("bpmEditorName").defaultValue;
+      document.getElementById("bpmStatus").textContent = "请选择新增作译者或填报选题；选题只暂存草稿，不办理提交。";
+      reportView.hidden = false;
+      bpmView.hidden = true;
+      document.getElementById("menuReport").classList.add("active");
+      document.getElementById("menuBpm").classList.remove("active");
+      sectionText.value = "";
+      scoreRows.replaceChildren();
+      renderAuthorStatus(null);
+      bpmPreview.replaceChildren(createEmptyState("先在“策划报告”菜单上传申报表并生成内容。"));
+      bpmJobs.replaceChildren(createEmptyState("暂无 BPM 任务"));
+    }
+
+    function loadUserDraft(user) {
+      const cached = localStorage.getItem(draftStorageKey(user));
+      if (!cached) return;
+      try {
+        const data = JSON.parse(cached);
+        if (Array.isArray(data.sections)) {
+          data.sections.forEach((saved, index) => {
+            const target = sections[index];
+            if (!target || !saved || typeof saved !== "object") return;
+            target.text = String(saved.text || "");
+            target.confirmed = Boolean(saved.confirmed);
+          });
+        }
+        if (Array.isArray(data.scoreItems)) {
+          data.scoreItems.forEach((saved, index) => {
+            const target = scoreItems[index];
+            const score = Array.isArray(saved) ? Number(saved[2]) : Number.NaN;
+            if (target && Number.isFinite(score)) target[2] = Math.max(0, Math.min(target[1], score));
+          });
+        }
+        bpmTopic = data.bpmTopic && typeof data.bpmTopic === "object" ? data.bpmTopic : null;
+        renderAuthorStatus(data.authorMaintenance || bpmTopic?.authorMaintenance || null);
+      } catch (error) {
+        console.warn("无法读取当前用户的本地草稿", error);
+      }
+    }
+
     function showAuthView(mode = "login") {
+      clearWorkspaceState();
       currentUser = null;
+      currentUserName.textContent = "";
       workspace.hidden = true;
       authView.hidden = false;
       loginForm.hidden = mode !== "login";
@@ -1490,7 +1565,9 @@
     }
 
     function showWorkspace(user) {
+      clearWorkspaceState();
       currentUser = user;
+      loadUserDraft(user);
       currentUserName.textContent = user.displayName || user.username;
       authView.hidden = true;
       workspace.hidden = false;
@@ -1646,14 +1723,30 @@
       if (window.lucide) window.lucide.createIcons();
     }
 
+    function createLucideIcon(name, size) {
+      const icon = document.createElement("i");
+      icon.dataset.lucide = name;
+      icon.setAttribute("size", String(size));
+      return icon;
+    }
+
+    function createEmptyState(message) {
+      const empty = document.createElement("div");
+      empty.className = "preview-empty";
+      empty.textContent = message;
+      return empty;
+    }
+
     function renderPending(items) {
-      pendingList.innerHTML = "";
       const list = items && items.length ? items : ["定价、版税率、发货折扣、首印数。", "出版资助、包销册数和预计毛利润。", "数字资源授权范围和维护周期。"];
-      list.forEach((item) => {
+      const nodes = list.map((item) => {
         const li = document.createElement("li");
-        li.innerHTML = `<i data-lucide="circle-alert" size="16"></i><span>${item}</span>`;
-        pendingList.appendChild(li);
+        const text = document.createElement("span");
+        text.textContent = String(item || "");
+        li.append(createLucideIcon("circle-alert", 16), text);
+        return li;
       });
+      pendingList.replaceChildren(...nodes);
       if (window.lucide) window.lucide.createIcons();
     }
 
@@ -1680,7 +1773,7 @@
         step.classList.toggle("active", num === activeStep);
         step.classList.toggle("done", doneSteps.includes(num));
         if (doneSteps.includes(num)) {
-          dot.innerHTML = '<i data-lucide="check" size="14"></i>';
+          dot.replaceChildren(createLucideIcon("check", 14));
         } else {
           dot.textContent = String(num);
         }
@@ -1712,7 +1805,7 @@
     }
 
     function renderTabs() {
-      tabs.innerHTML = "";
+      const buttons = [];
       sections.forEach((section, index) => {
         const button = document.createElement("button");
         button.className = `tab${index === activeIndex ? " active" : ""}`;
@@ -1722,8 +1815,9 @@
           activeIndex = index;
           render();
         });
-        tabs.appendChild(button);
+        buttons.push(button);
       });
+      tabs.replaceChildren(...buttons);
     }
 
     function renderEditor() {
@@ -1738,22 +1832,31 @@
     }
 
     function renderScores() {
-      scoreRows.innerHTML = "";
+      const rows = [];
       scoreItems.forEach((item) => {
         const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td>${item[0]}</td>
-          <td>${item[1]}</td>
-          <td><input class="score-input" type="number" min="0" max="${item[1]}" value="${item[2]}" aria-label="${item[0]}建议分"></td>
-        `;
-        const input = tr.querySelector("input");
+        const name = document.createElement("td");
+        const maximum = document.createElement("td");
+        const score = document.createElement("td");
+        const input = document.createElement("input");
+        name.textContent = item[0];
+        maximum.textContent = String(item[1]);
+        input.className = "score-input";
+        input.type = "number";
+        input.min = "0";
+        input.max = String(item[1]);
+        input.value = String(item[2]);
+        input.ariaLabel = `${item[0]}建议分`;
         input.addEventListener("input", () => {
           item[2] = Math.max(0, Math.min(item[1], Number(input.value || 0)));
           input.value = item[2];
           updateScoreTotal();
         });
-        scoreRows.appendChild(tr);
+        score.appendChild(input);
+        tr.append(name, maximum, score);
+        rows.push(tr);
       });
+      scoreRows.replaceChildren(...rows);
       updateScoreTotal();
     }
 
@@ -1877,21 +1980,21 @@
     function renderBpmPreview() {
       const hasGeneratedText = sections.some((section) => section.text.trim());
       if (!hasGeneratedText) {
-        bpmPreview.innerHTML = `<div class="preview-empty">先在“策划报告”菜单上传申报表并生成内容。</div>`;
+        bpmPreview.replaceChildren(createEmptyState("先在“策划报告”菜单上传申报表并生成内容。"));
         return;
       }
       const topic = currentBpmTopic();
-	      const rows = [
-	        ["选题名", topic.bookName],
-	        ["作者", topic.authorName || "待从申报表识别"],
-	        ["作译者库", topic.authorMaintenance?.bioStatus || "待生成"],
-	        ["策划编辑", topic.projectEditor || bpmEditorName()],
-	        ["拟责任编辑", topic.editor || bpmEditorName()],
-	        ["BPM分类", `教育 / 本科研究生 / ${topic.class3 || "待模型判断"} / ${topic.class4 || "待模型判断"}`],
-	        ["国标分类", topic.gbClass || "G"],
-	        ["层次", topic.readLevel || "高等理工"],
-	        ["选题特色", truncateText(topic.feature || "", 80)],
-	        ["同类比较", truncateText(topic.compare || "", 80)],
+      const rows = [
+        ["选题名", topic.bookName],
+        ["作者", topic.authorName || "待从申报表识别"],
+        ["作译者库", topic.authorMaintenance?.bioStatus || "待生成"],
+        ["策划编辑", topic.projectEditor || bpmEditorName()],
+        ["拟责任编辑", topic.editor || bpmEditorName()],
+        ["BPM分类", `教育 / 本科研究生 / ${topic.class3 || "待模型判断"} / ${topic.class4 || "待模型判断"}`],
+        ["国标分类", topic.gbClass || "G"],
+        ["层次", topic.readLevel || "高等理工"],
+        ["选题特色", truncateText(topic.feature || "", 80)],
+        ["同类比较", truncateText(topic.compare || "", 80)],
         ["读者群基数", topic.readerNum || "100"],
         ["稿件来源", topic.scriptSource || "作者独立投稿"],
         ["估计千字数", topic.words || "350.00"],
@@ -1903,12 +2006,20 @@
         ["评分总分", topic.scoreTotal ?? "待生成"],
         ["是否成本估算", topic.isCost === "1" ? "是" : "否"]
       ];
-      bpmPreview.innerHTML = rows.map(([label, value]) => `
-        <div class="preview-item">
-          <div class="preview-label">${label}</div>
-          <div class="preview-value" title="${String(value || "")}">${value || "未填写"}</div>
-        </div>
-      `).join("");
+      const nodes = rows.map(([label, value]) => {
+        const item = document.createElement("div");
+        const labelNode = document.createElement("div");
+        const valueNode = document.createElement("div");
+        item.className = "preview-item";
+        labelNode.className = "preview-label";
+        valueNode.className = "preview-value";
+        labelNode.textContent = label;
+        valueNode.title = String(value || "");
+        valueNode.textContent = String(value || "未填写");
+        item.append(labelNode, valueNode);
+        return item;
+      });
+      bpmPreview.replaceChildren(...nodes);
     }
 
     function jobStatusLabel(status) {
@@ -1933,26 +2044,37 @@
         const data = await response.json();
         const jobs = data.jobs || [];
         if (!jobs.length) {
-          bpmJobs.innerHTML = `<div class="preview-empty">暂无 BPM 任务</div>`;
+          bpmJobs.replaceChildren(createEmptyState("暂无 BPM 任务"));
           return;
         }
-        bpmJobs.innerHTML = jobs.map((job) => {
+        const cards = jobs.map((job) => {
           const logs = (job.logs || []).slice(-4).join("\n");
           const jobType = job.type === "author" ? "作译者维护" : "选题填报";
-          return `
-            <article class="job-card">
-              <div class="job-head">
-                <div class="job-title" title="${job.title || ""}">${job.title || "未命名选题"}</div>
-                <span class="status-pill small ${jobStatusClass(job.status)}">${jobStatusLabel(job.status)}</span>
-              </div>
-              <div class="job-meta">${jobType} · 发起人：${job.createdBy || "未知"} · 创建：${job.createdAt || ""}</div>
-              <div class="job-log">${logs || ""}</div>
-            </article>
-          `;
-        }).join("");
+          const card = document.createElement("article");
+          const head = document.createElement("div");
+          const jobTitle = document.createElement("div");
+          const status = document.createElement("span");
+          const meta = document.createElement("div");
+          const jobLog = document.createElement("div");
+          card.className = "job-card";
+          head.className = "job-head";
+          jobTitle.className = "job-title";
+          jobTitle.title = job.title || "";
+          jobTitle.textContent = job.title || "未命名选题";
+          status.className = `status-pill small ${jobStatusClass(job.status)}`;
+          status.textContent = jobStatusLabel(job.status);
+          meta.className = "job-meta";
+          meta.textContent = `${jobType} · 发起人：${job.createdBy || "未知"} · 创建：${job.createdAt || ""}`;
+          jobLog.className = "job-log";
+          jobLog.textContent = logs;
+          head.append(jobTitle, status);
+          card.append(head, meta, jobLog);
+          return card;
+        });
+        bpmJobs.replaceChildren(...cards);
         if (window.lucide) window.lucide.createIcons();
       } catch (error) {
-        bpmJobs.innerHTML = `<div class="preview-empty">${error.message || "任务日志读取失败"}</div>`;
+        bpmJobs.replaceChildren(createEmptyState(error.message || "任务日志读取失败"));
       }
     }
 
@@ -2002,7 +2124,7 @@
       renderAuthorStatus(bpmTopic ? bpmTopic.authorMaintenance : null);
       renderBpmPreview();
       renderPending(data.pending_questions || []);
-      scoreRows.innerHTML = "";
+      scoreRows.replaceChildren();
       render();
     }
 
@@ -2246,7 +2368,7 @@
         renderBpmPreview();
         document.getElementById("fileState").textContent = "已生成草稿 · 等待人工确认";
         renderPending(data.pending_questions || []);
-        scoreRows.innerHTML = "";
+        scoreRows.replaceChildren();
         render();
         finishProgress("生成完成");
         showToast("已生成全部段落");
@@ -2261,8 +2383,9 @@
     });
 
     document.getElementById("saveDraft").addEventListener("click", () => {
+      if (!currentUser) return;
       saveActiveText();
-      localStorage.setItem(draftKey, JSON.stringify({ sections, scoreItems, bpmTopic, authorMaintenance }));
+      localStorage.setItem(draftStorageKey(currentUser), JSON.stringify({ sections, scoreItems, bpmTopic, authorMaintenance }));
       showToast("草稿已保存");
     });
 
@@ -2408,27 +2531,6 @@
       }
     });
 
-    const cached = localStorage.getItem(draftKey);
-    if (cached) {
-      try {
-        const data = JSON.parse(cached);
-        if (Array.isArray(data.sections)) {
-          data.sections.forEach((section, index) => {
-            if (sections[index]) Object.assign(sections[index], section);
-          });
-        }
-        if (Array.isArray(data.scoreItems)) {
-          data.scoreItems.forEach((item, index) => {
-            if (scoreItems[index]) scoreItems[index][2] = item[2];
-          });
-        }
-        bpmTopic = data.bpmTopic || null;
-        renderAuthorStatus(data.authorMaintenance || bpmTopic?.authorMaintenance || null);
-      } catch (error) {
-        console.warn(error);
-      }
-    }
-
     const modelConfig = localStorage.getItem("phei-model-config");
     if (modelConfig) {
       try {
@@ -2440,6 +2542,7 @@
       }
     }
 
+    clearWorkspaceState();
     renderPending();
     render();
     renderBpmPreview();
