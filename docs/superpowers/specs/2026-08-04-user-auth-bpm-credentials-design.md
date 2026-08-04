@@ -13,7 +13,7 @@
 - 用户姓名作为报告署名和 BPM 策划编辑、拟责任编辑的默认来源。
 - BPM 账号密码的加密保存、更新、清除和自动调用。
 - DeepSeek 服务端统一配置及前端模型设置移除。
-- 用户维度的任务归属和基础使用记录。
+- 用户维度的持久任务记录。
 
 本次不包含：
 
@@ -84,6 +84,7 @@ SQLite 数据库默认位于 `data/app.db`，数据库文件不提交 Git。
 - `username`：唯一账号，规范化后比较。
 - `password_hash`：使用适合密码存储的哈希，不保存明文或可逆密文。
 - `display_name`：用户姓名。
+- `status`：`active` 或 `disabled`，用于停用账号而不删除历史数据。
 - `created_at`、`updated_at`、`last_login_at`。
 
 ### sessions
@@ -94,20 +95,37 @@ SQLite 数据库默认位于 `data/app.db`，数据库文件不提交 Git。
 
 浏览器仅保存随机会话令牌 Cookie，Cookie 设置 `HttpOnly`、`SameSite=Lax`。内网 HTTP 阶段不启用 `Secure`；未来部署 HTTPS 时必须启用。
 
-### bpm_credentials
+### integration_credentials
 
-- `user_id`：一对一关联用户。
-- `bpm_username`：加密保存。
-- `bpm_password`：加密保存。
-- `updated_at`。
+- `id`：整数主键。
+- `user_id`：关联用户。
+- `system_type`：外部系统类型，BPM 使用 `phei_bpm`。
+- `account_cipher`：加密后的账号。
+- `secret_cipher`：加密后的密码。
+- `nonce`：AES-GCM 随机参数。
+- `key_version`：加密密钥版本。
+- `config_json`：不含敏感信息的扩展配置。
+- `created_at`、`updated_at`。
+
+`user_id` 与 `system_type` 组成唯一约束。以后新增合同系统、OA 或其他平台时复用该表，不再增加新的密码表。
 
 BPM 凭据使用 AES-GCM 等带认证的加密方式。加密主密钥由 `APP_CREDENTIAL_KEY` 环境变量提供，不写入数据库、源代码或 Git。密钥缺失时服务拒绝保存和解密 BPM 凭据。
 
-### usage_logs
+### jobs
 
-- `id`、`user_id`、`action`、`status`、`created_at`。
-- 可保存选题名称、任务编号和脱敏错误摘要。
+- `id`、`user_id`、`job_type`、`title`、`status`。
+- `input_path`、`output_path`、`error_summary`。
+- `created_at`、`started_at`、`finished_at`。
+- `status` 使用 `queued`、`running`、`succeeded` 或 `failed`。
+- 可保存选题名称、任务编号和脱敏错误摘要，并为每个用户提供自己的任务历史。
 - 禁止保存网站密码、BPM密码、会话令牌、API Key和完整请求头。
+
+### schema_migrations
+
+- `version`：唯一迁移版本号。
+- `applied_at`：迁移完成时间。
+
+服务启动时按版本顺序执行缺失迁移，不通过删除数据库来升级结构。
 
 ## 服务端认证边界
 
@@ -143,9 +161,9 @@ BPM 凭据使用 AES-GCM 等带认证的加密方式。加密主密钥由 `APP_C
 - `POST /api/auth/login`：登录并创建会话。
 - `POST /api/auth/logout`：删除当前会话。
 - `GET /api/auth/me`：返回当前用户 ID、账号和姓名。
-- `GET /api/bpm-credentials`：仅返回是否已配置和脱敏账号状态。
-- `PUT /api/bpm-credentials`：保存或更新加密凭据。
-- `DELETE /api/bpm-credentials`：清除凭据。
+- `GET /api/integrations/phei-bpm`：仅返回是否已配置和脱敏账号状态。
+- `PUT /api/integrations/phei-bpm`：保存或更新加密凭据。
+- `DELETE /api/integrations/phei-bpm`：清除凭据。
 
 现有业务接口继续保留，但由后端会话注入姓名和 BPM 凭据，不再接收前端传来的 BPM 密码、模型 URL、模型名或 API Key。
 
@@ -171,10 +189,10 @@ BPM 凭据使用 AES-GCM 等带认证的加密方式。加密主密钥由 `APP_C
 
 - 注册、重复账号、登录失败、退出和会话过期。
 - 密码数据库中仅存在哈希，不出现明文。
-- BPM 凭据加密往返、错误密钥、更新和清除。
+- 通用外部系统凭据加密往返、错误密钥、更新和清除。
 - BPM凭据接口永不返回密码。
 - 未登录用户不能调用生成、导出、BPM或任务日志接口。
-- 不同用户只能读取自己的BPM配置和任务。
+- 不同用户只能读取自己的BPM配置和持久任务。
 - DeepSeek请求固定使用服务端模型配置，忽略客户端伪造字段。
 - 现有报告生成、DOCX导出、作译者维护和选题填报测试继续通过。
 
@@ -185,4 +203,3 @@ BPM 凭据使用 AES-GCM 等带认证的加密方式。加密主密钥由 `APP_C
 3. 两个用户分别发起BPM任务，确认使用各自账号且日志不泄露密码。
 4. 前端不再出现模型设置，生成报告默认使用V4 Pro。
 5. 数据库和任务输出中搜索测试密码、API Key，结果必须为空。
-
