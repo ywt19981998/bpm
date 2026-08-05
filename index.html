@@ -4,34 +4,35 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>选题策划报告工作台</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23d9f0ed'/%3E%3Cpath d='M10 7h9l4 4v14H10z' fill='none' stroke='%230f766e' stroke-width='2'/%3E%3Cpath d='M19 7v5h5M13 16h7M13 20h7' stroke='%230f766e' stroke-width='2'/%3E%3C/svg%3E">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23edf3ff'/%3E%3Cpath d='M10 7h9l4 4v14H10z' fill='none' stroke='%232563eb' stroke-width='2'/%3E%3Cpath d='M19 7v5h5M13 16h7M13 20h7' stroke='%232563eb' stroke-width='2'/%3E%3C/svg%3E">
   <script src="auth_session_generation.js"></script>
   <script src="vendor/lucide-0.468.0.min.js"></script>
   <style>
     :root {
-      --page: #f1f4f2;
-      --surface: #fcfdfc;
-      --surface-subtle: #f7f9f8;
-      --line: #d9dfdc;
-      --line-strong: #b7c1bc;
-      --text: #17211d;
-      --muted: #66716c;
-      --soft: #e9efec;
-      --teal: #08786d;
-      --teal-hover: #06665d;
-      --teal-soft: #e0f0ed;
+      --page: #f5f7fb;
+      --surface: #fdfefe;
+      --surface-subtle: #f7f9fc;
+      --line: #e1e7ef;
+      --line-strong: #c7d1df;
+      --text: #172033;
+      --muted: #6c7890;
+      --soft: #edf2f8;
+      --teal: #2563eb;
+      --teal-hover: #1d4ed8;
+      --teal-soft: #edf3ff;
       --red: #b73b35;
       --red-soft: #fae9e7;
       --amber: #8f5a08;
       --amber-soft: #fff3d8;
-      --ink: #22302a;
-      --sidebar: #172620;
-      --sidebar-surface: #20342c;
-      --sidebar-line: #30463d;
-      --sidebar-text: #f0f5f2;
-      --sidebar-muted: #aab9b2;
-      --shadow: 0 10px 28px rgba(30, 47, 40, 0.08);
-      --shadow-raised: 0 18px 48px rgba(23, 38, 32, 0.14);
+      --ink: #25314a;
+      --cyan: #17b6e9;
+      --sidebar: #ffffff;
+      --sidebar-surface: #f6f8fc;
+      --sidebar-line: #e2e8f1;
+      --sidebar-text: #172033;
+      --sidebar-muted: #718097;
+      --shadow: 0 10px 28px rgba(37, 99, 235, 0.07);
+      --shadow-raised: 0 22px 58px rgba(31, 54, 103, 0.15);
       --radius: 8px;
     }
 
@@ -91,7 +92,7 @@
     input:focus-visible,
     textarea:focus-visible,
     select:focus-visible {
-      outline: 3px solid rgba(8, 120, 109, 0.2);
+      outline: 3px solid rgba(37, 99, 235, 0.18);
       outline-offset: 2px;
     }
 
@@ -102,13 +103,14 @@
     }
 
     .primary {
-      background: var(--teal);
+      background: linear-gradient(135deg, #315de9, #168de8);
       border-color: var(--teal);
-      color: #f6fbf9;
+      color: #f8fbff;
+      box-shadow: 0 7px 18px rgba(37, 99, 235, 0.18);
     }
 
     .primary:hover {
-      background: var(--teal-hover);
+      background: linear-gradient(135deg, #244fd9, #087fd8);
       border-color: var(--teal-hover);
     }
 
@@ -121,21 +123,52 @@
     .app {
       min-height: 100dvh;
       display: grid;
-      grid-template-columns: 236px minmax(600px, 1fr) 344px;
+      grid-template-columns: 332px minmax(620px, 1fr) 318px;
       max-width: 1920px;
       margin: 0 auto;
-      background: var(--surface);
-      box-shadow: 0 0 0 1px rgba(23, 38, 32, 0.04);
+      background: var(--page);
+      box-shadow: 0 0 0 1px rgba(31, 54, 103, 0.04);
+    }
+
+    .app.bpm-mode {
+      grid-template-columns: 332px minmax(620px, 1fr);
+    }
+
+    .app.bpm-mode .right {
+      display: none;
     }
 
     .sidebar {
       border-right: 1px solid var(--sidebar-line);
       background: var(--sidebar);
       color: var(--sidebar-text);
-      padding: 20px 14px 16px;
+      display: grid;
+      grid-template-columns: 76px minmax(0, 1fr);
+      min-width: 0;
+    }
+
+    .icon-rail {
+      border-right: 1px solid var(--sidebar-line);
+      padding: 20px 8px 16px;
       display: flex;
       flex-direction: column;
-      gap: 18px;
+      align-items: center;
+      gap: 24px;
+      background: #fbfcff;
+    }
+
+    .project-rail {
+      min-width: 0;
+      padding: 22px 14px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      background: var(--sidebar-surface);
+    }
+
+    .rail-logo {
+      display: grid;
+      place-items: center;
     }
 
     .brand {
@@ -143,50 +176,52 @@
       align-items: center;
       gap: 11px;
       min-height: 44px;
-      padding: 0 4px;
+      padding: 0 2px;
     }
 
     .brand-mark {
-      width: 36px;
-      height: 36px;
-      border-radius: 8px;
-      background: rgba(105, 214, 198, 0.12);
+      width: 42px;
+      height: 42px;
+      border-radius: 10px;
+      background: linear-gradient(145deg, #315de9, #12a9e8);
       display: grid;
       place-items: center;
-      color: #85d9cc;
-      border: 1px solid rgba(133, 217, 204, 0.24);
+      color: #f8fbff;
+      border: 1px solid rgba(37, 99, 235, 0.18);
+      box-shadow: 0 8px 20px rgba(37, 99, 235, 0.2);
     }
 
     .brand-title {
-      font-size: 15px;
-      font-weight: 750;
+      font-size: 20px;
+      font-weight: 780;
     }
 
     .brand-sub {
-      color: var(--sidebar-muted);
+      color: var(--muted);
       font-size: 12px;
       margin-top: 2px;
     }
 
     .rail-section-label {
-      padding: 0 10px;
-      color: #80948b;
+      padding: 2px 4px 0;
+      color: #8793a8;
       font-size: 11px;
       font-weight: 700;
     }
 
     .project-switch {
-      border: 1px solid var(--sidebar-line);
-      background: var(--sidebar-surface);
+      border: 1px solid #dbe4f1;
+      background: rgba(255, 255, 255, 0.86);
       border-radius: var(--radius);
-      padding: 13px 12px;
+      padding: 14px;
+      box-shadow: 0 5px 16px rgba(31, 54, 103, 0.05);
     }
 
     .project-name {
       font-size: 14px;
       font-weight: 750;
       line-height: 1.35;
-      color: var(--sidebar-text);
+      color: var(--text);
     }
 
     .project-meta {
@@ -196,75 +231,86 @@
     }
 
     .sidebar .project-meta {
-      color: var(--sidebar-muted);
+      color: var(--muted);
     }
 
     .main-menu {
       display: grid;
-      gap: 4px;
+      gap: 10px;
+      width: 100%;
     }
 
     .menu-button {
-      justify-content: flex-start;
+      min-height: 66px;
+      justify-content: center;
+      flex-direction: column;
+      gap: 5px;
       width: 100%;
       border-color: transparent;
       background: transparent;
-      color: var(--sidebar-muted);
+      color: #53627a;
       font-weight: 650;
-      padding: 0 11px;
+      padding: 8px 4px;
+      font-size: 11px;
     }
 
     .menu-button:hover {
-      color: var(--sidebar-text);
+      color: var(--teal);
       border-color: transparent;
-      background: rgba(255, 255, 255, 0.06);
+      background: #f0f5ff;
     }
 
     .menu-button.active {
-      background: #f2f7f5;
-      color: #075f57;
-      border-color: #f2f7f5;
+      background: var(--teal-soft);
+      color: var(--teal);
+      border-color: #dbe7ff;
+      box-shadow: inset 3px 0 0 var(--teal);
+    }
+
+    .new-topic-button {
+      width: 100%;
+      min-height: 42px;
     }
 
     .steps {
       display: grid;
-      gap: 3px;
+      gap: 4px;
       position: relative;
     }
 
     .step {
-      min-height: 40px;
+      min-height: 52px;
       display: grid;
       grid-template-columns: 26px 1fr auto;
       align-items: center;
       gap: 8px;
-      padding: 6px 9px;
-      border-radius: 6px;
-      color: var(--sidebar-muted);
+      padding: 8px 10px;
+      border-radius: 8px;
+      color: #65738a;
       font-size: 13px;
     }
 
     .step.active {
-      background: rgba(255, 255, 255, 0.07);
-      color: var(--sidebar-text);
+      background: linear-gradient(90deg, #eaf1ff, #f4f7ff);
+      color: var(--teal);
       font-weight: 700;
     }
 
     .step.done .step-dot {
-      background: #77cfc1;
-      color: #153027;
-      border-color: #77cfc1;
+      background: #ddf7ed;
+      color: #179b68;
+      border-color: #bdebd9;
     }
 
     .step-dot {
       width: 24px;
       height: 24px;
-      border: 1px solid #4b6258;
+      border: 1px solid #cbd6e5;
       border-radius: 50%;
       display: grid;
       place-items: center;
       font-size: 12px;
-      background: transparent;
+      background: #f8faff;
       color: inherit;
     }
 
@@ -276,24 +322,24 @@
 
     .sidebar-actions button {
       justify-content: flex-start;
-      color: var(--sidebar-muted);
+      color: #627189;
       border-color: transparent;
       background: transparent;
     }
 
     .sidebar-actions button:hover {
-      color: var(--sidebar-text);
-      border-color: var(--sidebar-line);
-      background: rgba(255, 255, 255, 0.05);
+      color: var(--teal);
+      border-color: #dbe4f1;
+      background: #f0f5ff;
     }
 
     .main {
       min-width: 0;
-      padding: 24px 28px 32px;
+      padding: 22px 26px 30px;
       display: flex;
       flex-direction: column;
       gap: 16px;
-      background: var(--surface);
+      background: #fbfcff;
     }
 
     .bpm-layout {
@@ -315,9 +361,9 @@
     }
 
     .author-strip {
-      border: 1px solid #cddbd5;
+      border: 1px solid #d8e4f7;
       border-radius: var(--radius);
-      background: #f4f8f6;
+      background: #f2f6ff;
       padding: 11px 14px;
       display: grid;
       grid-template-columns: auto 1fr auto;
@@ -341,8 +387,8 @@
     }
 
     .author-badge {
-      border: 1px solid #bcded8;
-      background: #e6f3f0;
+      border: 1px solid #d5e3ff;
+      background: #eaf1ff;
       color: var(--teal);
       font-size: 12px;
       font-weight: 700;
@@ -422,7 +468,7 @@
     .status-pill.done {
       background: var(--teal-soft);
       color: var(--teal);
-      border-color: #b8dfd9;
+      border-color: #cbdcff;
     }
 
     .status-pill.error {
@@ -432,7 +478,7 @@
     }
 
     .topbar {
-      min-height: 56px;
+      min-height: 64px;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -441,7 +487,7 @@
     }
 
     .title-block h1 {
-      font-size: 24px;
+      font-size: 26px;
       line-height: 1.25;
       margin: 0;
       font-weight: 780;
@@ -462,23 +508,22 @@
     }
 
     .file-strip {
-      border: 1px solid #cbd5d0;
-      background: var(--surface-subtle);
+      border: 1px solid var(--line);
+      background: var(--surface);
       border-radius: var(--radius);
-      padding: 14px 15px;
+      padding: 13px 15px;
       display: grid;
       grid-template-columns: minmax(220px, 1fr) auto auto;
       align-items: center;
       gap: 10px;
+      box-shadow: 0 5px 18px rgba(31, 54, 103, 0.04);
     }
 
     .quick-import {
-      border: 0;
-      border-top: 1px solid var(--line);
-      border-bottom: 1px solid var(--line);
-      background: transparent;
-      border-radius: 0;
-      padding: 15px 0;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: var(--radius);
+      padding: 14px;
       display: grid;
       gap: 12px;
     }
@@ -510,7 +555,7 @@
     .quick-file {
       border: 1px solid var(--line);
       border-radius: 7px;
-      background: var(--surface-subtle);
+      background: #f8faff;
       padding: 11px;
       display: grid;
       gap: 8px;
@@ -531,7 +576,7 @@
       width: 38px;
       height: 38px;
       border-radius: 7px;
-      background: var(--soft);
+      background: #ebf2ff;
       display: grid;
       place-items: center;
       color: var(--teal);
@@ -559,15 +604,14 @@
       display: grid;
       grid-template-columns: repeat(6, minmax(80px, 1fr));
       gap: 0;
-      background: transparent;
-      padding: 0;
-      border-radius: 0;
-      border: 0;
-      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+      padding: 0 12px;
+      border-radius: var(--radius) var(--radius) 0 0;
+      border: 1px solid var(--line);
     }
 
     .tab {
-      min-height: 42px;
+      min-height: 46px;
       border-radius: 0;
       border: 0;
       border-bottom: 2px solid transparent;
@@ -590,7 +634,7 @@
 
     .tab:hover {
       border-color: transparent;
-      border-bottom-color: #aabbb5;
+      border-bottom-color: #9fb9ef;
       background: transparent;
       color: var(--text);
     }
@@ -603,8 +647,9 @@
     .editor {
       background: var(--surface);
       border: 1px solid var(--line);
-      border-radius: var(--radius);
-      box-shadow: 0 8px 24px rgba(30, 47, 40, 0.06);
+      border-top: 0;
+      border-radius: 0 0 var(--radius) var(--radius);
+      box-shadow: 0 12px 34px rgba(31, 54, 103, 0.07);
       min-height: 510px;
       display: grid;
       grid-template-rows: auto 1fr auto;
@@ -612,7 +657,7 @@
     }
 
     .editor-head {
-      padding: 16px 18px;
+      padding: 18px 24px;
       border-bottom: 1px solid var(--line);
       display: flex;
       align-items: center;
@@ -621,7 +666,7 @@
     }
 
     .section-title {
-      font-size: 18px;
+      font-size: 19px;
       font-weight: 760;
       margin: 0;
     }
@@ -648,37 +693,36 @@
     .status-pill.confirmed {
       background: var(--teal-soft);
       color: var(--teal);
-      border-color: #b8dfd9;
+      border-color: #cbdcff;
     }
 
     .text-shell {
-      padding: 16px 18px;
+      padding: 18px 24px;
       min-height: 0;
-      background: var(--surface-subtle);
+      background: var(--surface);
     }
 
     textarea {
       width: 100%;
       height: 100%;
-      min-height: 370px;
+      min-height: 390px;
       resize: none;
-      border: 1px solid var(--line);
+      border: 0;
       border-radius: 7px;
-      padding: 18px 20px;
-      line-height: 1.95;
+      padding: 4px 10px;
+      line-height: 2;
       color: var(--text);
-      background: var(--surface);
+      background: transparent;
       outline: none;
-      font-size: 14px;
+      font-size: 15px;
     }
 
     textarea:focus {
-      border-color: #76b8af;
-      box-shadow: 0 0 0 3px rgba(8, 120, 109, 0.11);
+      box-shadow: none;
     }
 
     .editor-foot {
-      padding: 12px 18px;
+      padding: 12px 24px;
       border-top: 1px solid var(--line);
       display: flex;
       align-items: center;
@@ -693,26 +737,40 @@
 
     .right {
       border-left: 1px solid var(--line);
-      background: var(--surface-subtle);
-      padding: 24px 18px;
+      background: #f7f9fd;
+      padding: 22px 14px;
       display: flex;
       flex-direction: column;
-      gap: 0;
+      gap: 12px;
       min-width: 0;
     }
 
     .panel {
-      background: transparent;
-      border: 0;
-      border-bottom: 1px solid var(--line);
-      border-radius: 0;
-      padding: 0 0 18px;
-      margin-bottom: 18px;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      margin-bottom: 0;
+      box-shadow: 0 5px 18px rgba(31, 54, 103, 0.04);
     }
 
     .panel:last-child {
-      border-bottom: 0;
       margin-bottom: 0;
+    }
+
+    .assist-heading {
+      min-height: 32px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 760;
+      padding: 0 4px;
+    }
+
+    .assist-heading i {
+      color: var(--teal);
     }
 
     .panel-title {
@@ -733,7 +791,7 @@
       border: 1px solid var(--line);
       border-radius: 7px;
       margin-bottom: 12px;
-      background: var(--surface);
+      background: #f8faff;
     }
 
     .score-num {
@@ -752,7 +810,7 @@
     .score-table th,
     .score-table td {
       padding: 8px 4px;
-      border-bottom: 1px solid #eef0ee;
+      border-bottom: 1px solid #edf1f7;
       text-align: left;
       vertical-align: middle;
     }
@@ -778,8 +836,8 @@
     .preview-frame {
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      background: #e9eeeb;
-      height: 320px;
+      background: #f1f4f9;
+      height: 260px;
       overflow: hidden;
       display: grid;
       place-items: center;
@@ -862,7 +920,7 @@
     .progress-track {
       height: 6px;
       border-radius: 999px;
-      background: #e5ebe6;
+      background: #e4eaf4;
       overflow: hidden;
     }
 
@@ -878,8 +936,8 @@
       position: fixed;
       right: 18px;
       bottom: 18px;
-      background: #1b2b24;
-      color: #f6fbf9;
+      background: #1e2a44;
+      color: #f7f9ff;
       border-radius: 7px;
       padding: 12px 14px;
       box-shadow: var(--shadow);
@@ -902,8 +960,8 @@
       place-items: center;
       padding: 24px;
       background:
-        linear-gradient(90deg, rgba(23, 38, 32, 0.035) 1px, transparent 1px),
-        linear-gradient(rgba(23, 38, 32, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(37, 99, 235, 0.035) 1px, transparent 1px),
+        linear-gradient(rgba(37, 99, 235, 0.035) 1px, transparent 1px),
         var(--page);
       background-size: 32px 32px;
     }
@@ -922,9 +980,9 @@
     }
 
     .auth-brand .brand-mark {
-      background: var(--teal-soft);
-      border-color: #b8dcd6;
-      color: var(--teal);
+      background: linear-gradient(145deg, #315de9, #12a9e8);
+      border-color: #cbdcff;
+      color: #f8fbff;
     }
 
     .auth-brand .brand-sub {
@@ -994,7 +1052,7 @@
 
     .auth-form input:focus {
       border-color: var(--teal);
-      outline: 3px solid rgba(8, 120, 109, 0.14);
+      outline: 3px solid rgba(37, 99, 235, 0.14);
       outline-offset: 1px;
     }
 
@@ -1013,7 +1071,7 @@
       gap: 8px;
       padding: 10px;
       border: 1px solid var(--sidebar-line);
-      background: var(--sidebar-surface);
+      background: rgba(255, 255, 255, 0.8);
       border-radius: 8px;
     }
 
@@ -1046,14 +1104,14 @@
     }
 
     .sidebar .icon-button {
-      color: var(--sidebar-muted);
+      color: #617088;
       border-color: var(--sidebar-line);
-      background: transparent;
+      background: #fbfcff;
     }
 
     .sidebar .icon-button:hover {
-      color: var(--sidebar-text);
-      background: rgba(255, 255, 255, 0.06);
+      color: var(--teal);
+      background: var(--teal-soft);
     }
 
     .settings-dialog {
@@ -1068,8 +1126,8 @@
     }
 
     .settings-dialog::backdrop {
-      background: rgba(19, 31, 26, 0.5);
-      backdrop-filter: blur(2px);
+      background: rgba(24, 35, 62, 0.36);
+      backdrop-filter: blur(3px);
     }
 
     .settings-dialog-shell {
@@ -1128,7 +1186,7 @@
       border-radius: var(--radius);
       padding: 16px;
       margin: 0;
-      box-shadow: 0 4px 14px rgba(30, 47, 40, 0.04);
+      box-shadow: 0 5px 18px rgba(31, 54, 103, 0.04);
     }
 
     .bpm-layout .preview-empty {
@@ -1154,13 +1212,18 @@
       }
     }
 
-    @media (max-width: 1160px) {
+    @media (max-width: 1380px) {
       .app {
-        grid-template-columns: 220px minmax(0, 1fr);
+        grid-template-columns: 312px minmax(0, 1fr);
+      }
+
+      .app.bpm-mode {
+        grid-template-columns: 312px minmax(0, 1fr);
       }
 
       .sidebar {
         grid-row: 1 / span 2;
+        grid-template-columns: 72px minmax(0, 1fr);
       }
 
       .right {
@@ -1169,10 +1232,16 @@
         border-top: 1px solid var(--line);
         display: grid;
         grid-template-columns: 1fr 1fr 1fr;
+        align-items: start;
+        padding: 20px 24px 28px;
+      }
+
+      .assist-heading {
+        grid-column: 1 / -1;
       }
 
       .bpm-layout {
-        grid-template-columns: 1fr;
+        grid-template-columns: minmax(0, 1fr) 290px;
       }
     }
 
@@ -1186,8 +1255,41 @@
       }
 
       .sidebar {
-        padding: 14px;
+        display: block;
+        border-right: 0;
+        border-bottom: 1px solid var(--sidebar-line);
+      }
+
+      .icon-rail {
+        min-height: 62px;
+        padding: 9px 14px;
+        border-right: 0;
+        border-bottom: 1px solid var(--sidebar-line);
+        flex-direction: row;
+        justify-content: space-between;
         gap: 12px;
+      }
+
+      .icon-rail .brand-mark {
+        width: 38px;
+        height: 38px;
+        border-radius: 9px;
+      }
+
+      .project-rail {
+        padding: 14px 16px 16px;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+      }
+
+      .brand {
+        min-height: 42px;
+      }
+
+      .new-topic-button {
+        width: auto;
+        align-self: center;
       }
 
       .right {
@@ -1198,23 +1300,50 @@
         display: none;
       }
 
-      .main-menu,
-      .sidebar-actions {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+      .main-menu {
+        display: flex;
+        gap: 6px;
+        width: auto;
+      }
+
+      .menu-button {
+        min-height: 40px;
+        width: auto;
+        flex-direction: row;
+        padding: 0 10px;
+        font-size: 12px;
+      }
+
+      .menu-button.active {
+        box-shadow: inset 0 -2px 0 var(--teal);
       }
 
       .sidebar-actions {
         margin-top: 0;
+        align-self: end;
       }
 
       .steps {
+        grid-column: 1 / -1;
         grid-template-columns: repeat(4, minmax(130px, 1fr));
         overflow-x: auto;
         padding-bottom: 2px;
       }
 
+      .project-switch {
+        grid-column: 1 / -1;
+      }
+
       .step {
         grid-template-columns: 26px 1fr;
+      }
+
+      .step > :last-child {
+        display: none;
+      }
+
+      .user-menu {
+        min-width: 230px;
       }
 
       .main {
@@ -1237,6 +1366,10 @@
         display: grid;
         grid-template-columns: 1fr;
         padding: 20px 16px;
+      }
+
+      .assist-heading {
+        grid-column: auto;
       }
 
       .preview-grid {
@@ -1275,6 +1408,10 @@
       .bpm-account-state button {
         width: 100%;
       }
+
+      .bpm-layout {
+        grid-template-columns: 1fr;
+      }
     }
 
     @media (max-width: 560px) {
@@ -1286,11 +1423,42 @@
         padding: 11px;
       }
 
+      .project-rail {
+        grid-template-columns: 1fr;
+      }
+
+      .new-topic-button,
+      .user-menu,
+      .sidebar-actions {
+        width: 100%;
+      }
+
+      .new-topic-button {
+        justify-content: center;
+      }
+
+      .project-switch,
+      .steps {
+        grid-column: auto;
+      }
+
+      .user-menu {
+        min-width: 0;
+      }
+
       .topbar > .top-actions,
       .editor-foot .top-actions,
-      .main-menu,
       .sidebar-actions {
         grid-template-columns: 1fr;
+      }
+
+      .menu-button span {
+        display: none;
+      }
+
+      .menu-button {
+        width: 40px;
+        padding: 0;
       }
 
       .topbar > .top-actions .primary {
@@ -1388,62 +1556,76 @@
 
   <div class="app" id="workspace" hidden>
     <aside class="sidebar">
-      <div class="brand">
-        <div class="brand-mark"><i data-lucide="file-text"></i></div>
-        <div>
-          <div class="brand-title">策划报告工作台</div>
-          <div class="brand-sub">教育出版板块</div>
+      <div class="icon-rail">
+        <div class="rail-logo" aria-label="策划报告工作台" title="策划报告工作台">
+          <div class="brand-mark"><i data-lucide="blocks" size="20"></i></div>
         </div>
+        <nav class="main-menu" aria-label="主要功能">
+          <button class="menu-button active" id="menuReport" title="策划报告">
+            <i data-lucide="file-pen-line" size="20"></i>
+            <span>策划报告</span>
+          </button>
+          <button class="menu-button" id="menuBpm" title="BPM 填报">
+            <i data-lucide="workflow" size="20"></i>
+            <span>BPM 填报</span>
+          </button>
+        </nav>
       </div>
 
-      <div class="rail-section-label">工作区</div>
-      <nav class="main-menu">
-        <button class="menu-button active" id="menuReport"><i data-lucide="file-pen-line" size="16"></i>策划报告</button>
-        <button class="menu-button" id="menuBpm"><i data-lucide="workflow" size="16"></i>BPM 填报</button>
-      </nav>
+      <div class="project-rail">
+        <div class="brand">
+          <div>
+            <div class="brand-title">策划报告</div>
+            <div class="brand-sub">教育出版智能工作台</div>
+          </div>
+        </div>
 
-      <div class="rail-section-label">当前选题</div>
-      <div class="project-switch">
-        <div class="project-name" id="projectName">新建选题</div>
-        <div class="project-meta" id="projectMeta">等待上传选题申报表</div>
-      </div>
+        <button class="primary new-topic-button" id="newTopicButton" type="button">
+          <i data-lucide="plus" size="17"></i>上传新选题
+        </button>
 
-      <div class="rail-section-label">报告进度</div>
-      <div class="steps">
-        <div class="step active" id="step1">
-          <span class="step-dot">1</span>
-          <span>申报表解析</span>
-          <span></span>
+        <div class="rail-section-label">当前项目</div>
+        <div class="project-switch">
+          <div class="project-name" id="projectName">新建选题</div>
+          <div class="project-meta" id="projectMeta">等待上传选题申报表</div>
         </div>
-        <div class="step" id="step2">
-          <span class="step-dot">2</span>
-          <span>报告编辑</span>
-          <span></span>
-        </div>
-        <div class="step" id="step3">
-          <span class="step-dot">3</span>
-          <span>评分确认</span>
-          <span></span>
-        </div>
-        <div class="step" id="step4">
-          <span class="step-dot">4</span>
-          <span>模板导出</span>
-          <span></span>
-        </div>
-      </div>
 
-      <div class="sidebar-actions">
-        <button id="saveDraft"><i data-lucide="save" size="16"></i>保存草稿</button>
-        <button><i data-lucide="history" size="16"></i>版本记录</button>
-      </div>
-
-      <div class="user-menu">
-        <div class="current-user">
-          <span class="current-user-label">当前用户</span>
-          <span class="current-user-name" id="currentUserName"></span>
+        <div class="rail-section-label">工作流程</div>
+        <div class="steps">
+          <div class="step active" id="step1">
+            <span class="step-dot">1</span>
+            <span>申报表解析</span>
+            <span></span>
+          </div>
+          <div class="step" id="step2">
+            <span class="step-dot">2</span>
+            <span>报告编辑</span>
+            <span></span>
+          </div>
+          <div class="step" id="step3">
+            <span class="step-dot">3</span>
+            <span>评分确认</span>
+            <span></span>
+          </div>
+          <div class="step" id="step4">
+            <span class="step-dot">4</span>
+            <span>模板导出</span>
+            <span></span>
+          </div>
         </div>
-        <button class="icon-button" id="bpmSettingsButton" type="button" aria-label="个人设置" title="个人设置"><i data-lucide="key-round" size="16"></i></button>
-        <button class="icon-button" id="logoutButton" type="button" aria-label="退出登录" title="退出登录"><i data-lucide="log-out" size="16"></i></button>
+
+        <div class="sidebar-actions">
+          <button><i data-lucide="history" size="16"></i>版本记录</button>
+        </div>
+
+        <div class="user-menu">
+          <div class="current-user">
+            <span class="current-user-label">当前用户</span>
+            <span class="current-user-name" id="currentUserName"></span>
+          </div>
+          <button class="icon-button" id="bpmSettingsButton" type="button" aria-label="个人设置" title="个人设置"><i data-lucide="settings" size="17"></i></button>
+          <button class="icon-button" id="logoutButton" type="button" aria-label="退出登录" title="退出登录"><i data-lucide="log-out" size="17"></i></button>
+        </div>
       </div>
     </aside>
 
@@ -1487,7 +1669,7 @@
           <p>上传申报表后生成一到六部分，正文段落默认首行空两格。</p>
         </div>
         <div class="top-actions">
-          <button><i data-lucide="settings-2" size="16"></i>规则</button>
+          <button id="saveDraft"><i data-lucide="save" size="16"></i>保存草稿</button>
           <button class="primary" id="exportDocx"><i data-lucide="download" size="16"></i>导出 DOCX</button>
         </div>
       </div>
@@ -1505,6 +1687,48 @@
           <button type="button" id="chooseFile"><i data-lucide="upload" size="16"></i>选择文件</button>
         </label>
         <button id="generateAll"><i data-lucide="sparkles" size="16"></i>生成全部</button>
+      </section>
+
+      <section class="progress-panel" id="progressPanel" hidden>
+        <div class="progress-top">
+          <span id="progressText">正在分析申报表并生成策划报告...</span>
+          <span id="progressPercent">0%</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-bar" id="progressBar"></div>
+        </div>
+      </section>
+
+      <nav class="tabs" id="tabs"></nav>
+
+      <section class="editor">
+        <div class="editor-head">
+          <div>
+            <h2 class="section-title" id="sectionTitle"></h2>
+            <div class="section-sub" id="sectionSub"></div>
+          </div>
+          <span class="status-pill" id="sectionStatus">待确认</span>
+        </div>
+        <div class="text-shell">
+          <textarea id="sectionText" spellcheck="false"></textarea>
+        </div>
+        <div class="editor-foot">
+          <div class="word-count" id="wordCount">0 字</div>
+          <div class="top-actions">
+            <button id="indentText"><i data-lucide="indent-increase" size="16"></i>首行两格</button>
+            <button id="polishText"><i data-lucide="wand-2" size="16"></i>润色</button>
+            <button id="confirmText" class="primary"><i data-lucide="check-circle-2" size="16"></i>确认本段</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="author-strip" id="authorStrip">
+        <i data-lucide="user-round-check" size="18"></i>
+        <div>
+          <div class="author-title" id="authorTitle">作译者信息待提取</div>
+          <div class="author-meta" id="authorMeta">上传申报表并生成后，可单独新增至 BPM 作译者库。</div>
+        </div>
+        <div class="author-badge" id="authorBadge">等待</div>
       </section>
 
       <section class="quick-import">
@@ -1538,48 +1762,6 @@
             </div>
             <button type="button" id="chooseQuickReport"><i data-lucide="upload" size="16"></i>选择策划报告</button>
           </label>
-        </div>
-      </section>
-
-      <section class="author-strip" id="authorStrip">
-        <i data-lucide="user-round-check" size="18"></i>
-        <div>
-          <div class="author-title" id="authorTitle">作译者信息待提取</div>
-          <div class="author-meta" id="authorMeta">上传申报表并生成后，可单独新增至 BPM 作译者库。</div>
-        </div>
-        <div class="author-badge" id="authorBadge">等待</div>
-      </section>
-
-      <section class="progress-panel" id="progressPanel" hidden>
-        <div class="progress-top">
-          <span id="progressText">正在分析申报表并生成策划报告...</span>
-          <span id="progressPercent">0%</span>
-        </div>
-        <div class="progress-track">
-          <div class="progress-bar" id="progressBar"></div>
-        </div>
-      </section>
-
-      <nav class="tabs" id="tabs"></nav>
-
-      <section class="editor">
-        <div class="editor-head">
-          <div>
-            <h2 class="section-title" id="sectionTitle"></h2>
-            <div class="section-sub" id="sectionSub"></div>
-          </div>
-          <span class="status-pill" id="sectionStatus">待确认</span>
-        </div>
-        <div class="text-shell">
-          <textarea id="sectionText" spellcheck="false"></textarea>
-        </div>
-        <div class="editor-foot">
-          <div class="word-count" id="wordCount">0 字</div>
-          <div class="top-actions">
-            <button id="indentText"><i data-lucide="indent-increase" size="16"></i>首行两格</button>
-            <button id="polishText"><i data-lucide="wand-2" size="16"></i>润色</button>
-            <button id="confirmText" class="primary"><i data-lucide="check-circle-2" size="16"></i>确认本段</button>
-          </div>
         </div>
       </section>
     </main>
@@ -1647,6 +1829,7 @@
     </main>
 
     <aside class="right">
+      <div class="assist-heading"><i data-lucide="sparkles" size="17"></i>智能辅助</div>
       <section class="panel">
         <h3 class="panel-title"><i data-lucide="gauge" size="16"></i>建议评分</h3>
         <div class="score-total">
@@ -2253,6 +2436,7 @@
 
     function switchMainView(view) {
       const isBpm = view === "bpm";
+      document.getElementById("workspace").classList.toggle("bpm-mode", isBpm);
       reportView.hidden = isBpm;
       bpmView.hidden = !isBpm;
       document.getElementById("menuReport").classList.toggle("active", !isBpm);
@@ -2744,6 +2928,11 @@
     });
 
     document.getElementById("chooseFile").addEventListener("click", () => {
+      document.getElementById("fileInput").click();
+    });
+
+    document.getElementById("newTopicButton").addEventListener("click", () => {
+      switchMainView("report");
       document.getElementById("fileInput").click();
     });
 

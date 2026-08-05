@@ -23,6 +23,13 @@ test('BPM view has separate topic and author buttons', () => {
   assert.match(source, /id="queueBpm"[^>]*>.*填报选题/s);
 });
 
+test('BPM view expands the workspace and hides report-only assistance', () => {
+  const switchBody = functionBody('switchMainView');
+
+  assert.match(source, /\.app\.bpm-mode \.right\s*{[^}]*display:\s*none;/s);
+  assert.match(switchBody, /classList\.toggle\("bpm-mode", isBpm\)/);
+});
+
 test('buttons use separate backend endpoints', () => {
   assert.match(source, /apiFetch\("\/api\/bpm-author-jobs"/);
   assert.match(source, /apiFetch\("\/api\/bpm-topic-jobs"/);
