@@ -33,7 +33,7 @@ test("registration collects only account, name, password, and password confirmat
 
 test("authenticated navigation exposes the current name and icon-only logout control", () => {
   assert.match(source, /id="currentUserName"/);
-  assert.match(source, /id="bpmSettingsButton"[^>]*aria-label="BPM 配置"/);
+  assert.match(source, /id="bpmSettingsButton"[^>]*aria-label="个人设置"/);
   assert.match(source, /id="logoutButton"[^>]*aria-label="退出登录"/);
 });
 
@@ -50,6 +50,20 @@ test("BPM credentials are configured per session without exposing stored secrets
   assert.match(source, /method:\s*"PUT"/);
   assert.match(source, /method:\s*"DELETE"/);
   assert.match(source, /密码已保存/);
+});
+
+test("BPM credentials live in personal settings instead of the BPM task page", () => {
+  const dialog = source.match(/<dialog[^>]*id="bpmSettingsDialog"[\s\S]*?<\/dialog>/)?.[0] || "";
+  const bpmView = source.match(/<main[^>]*id="bpmView"[\s\S]*?<\/main>/)?.[0] || "";
+
+  assert.match(dialog, /id="bpmUser"/);
+  assert.match(dialog, /id="bpmPassword"/);
+  assert.match(dialog, /id="saveBpmCredentials"/);
+  assert.doesNotMatch(bpmView, /id="bpmUser"/);
+  assert.doesNotMatch(bpmView, /id="bpmPassword"/);
+  assert.match(bpmView, /id="openBpmSettingsFromTask"/);
+  assert.match(source, /function openBpmSettingsDialog\(/);
+  assert.match(source, /bpmSettingsDialog\.showModal\(\)/);
 });
 
 test("legacy browser BPM secrets are purged before user drafts are restored", () => {

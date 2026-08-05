@@ -55,7 +55,7 @@ test('BPM queue payloads use the authenticated display name without client crede
 test('queue actions require persisted BPM configuration and retain it after queueing', () => {
   assert.match(source, /let bpmCredentialConfigured = false;/);
   assert.match(source, /if \(!bpmCredentialConfigured\)/);
-  assert.match(source, /请先在 BPM 配置中保存账号和密码/);
+  assert.match(source, /请先在个人设置中保存 BPM 账号和密码/);
   assert.doesNotMatch(source, /document\.getElementById\("bpmPassword"\)\.value = ""/);
 });
 

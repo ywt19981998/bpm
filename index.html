@@ -918,6 +918,67 @@
       padding: 0;
     }
 
+    .settings-dialog {
+      width: min(460px, calc(100vw - 32px));
+      max-height: calc(100vh - 32px);
+      padding: 0;
+      border: 0;
+      border-radius: var(--radius);
+      color: var(--text);
+      background: var(--surface);
+      box-shadow: 0 18px 50px rgba(24, 34, 29, 0.2);
+    }
+
+    .settings-dialog::backdrop {
+      background: rgba(24, 34, 29, 0.42);
+    }
+
+    .settings-dialog-shell {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      max-height: calc(100vh - 32px);
+    }
+
+    .settings-dialog-head {
+      min-height: 58px;
+      padding: 12px 14px 12px 18px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .settings-dialog-title {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 800;
+    }
+
+    .settings-dialog-body {
+      padding: 18px;
+      overflow: auto;
+    }
+
+    .settings-dialog .model-form {
+      gap: 12px;
+    }
+
+    .bpm-account-state {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .bpm-account-copy {
+      min-width: 0;
+    }
+
+    .bpm-account-copy .file-state {
+      margin-top: 5px;
+    }
+
     @media (max-width: 1160px) {
       .app {
         grid-template-columns: 220px minmax(520px, 1fr);
@@ -999,6 +1060,14 @@
       .topbar > .top-actions .primary {
         grid-column: 1 / -1;
       }
+
+      .bpm-account-state {
+        grid-template-columns: 1fr;
+      }
+
+      .bpm-account-state button {
+        width: 100%;
+      }
     }
   </style>
 </head>
@@ -1074,7 +1143,7 @@
           <span class="current-user-label">当前用户</span>
           <span class="current-user-name" id="currentUserName"></span>
         </div>
-        <button class="icon-button" id="bpmSettingsButton" type="button" aria-label="BPM 配置" title="BPM 配置"><i data-lucide="key-round" size="16"></i></button>
+        <button class="icon-button" id="bpmSettingsButton" type="button" aria-label="个人设置" title="个人设置"><i data-lucide="key-round" size="16"></i></button>
         <button class="icon-button" id="logoutButton" type="button" aria-label="退出登录" title="退出登录"><i data-lucide="log-out" size="16"></i></button>
       </div>
 
@@ -1111,6 +1180,39 @@
         <button><i data-lucide="history" size="16"></i>版本记录</button>
       </div>
     </aside>
+
+    <dialog class="settings-dialog" id="bpmSettingsDialog" aria-labelledby="bpmSettingsTitle">
+      <div class="settings-dialog-shell">
+        <header class="settings-dialog-head">
+          <h2 class="settings-dialog-title" id="bpmSettingsTitle">个人设置</h2>
+          <button class="icon-button" id="closeBpmSettings" type="button" aria-label="关闭个人设置" title="关闭">
+            <i data-lucide="x" size="17"></i>
+          </button>
+        </header>
+        <div class="settings-dialog-body">
+          <div class="model-form">
+            <div>
+              <h3 class="panel-title"><i data-lucide="key-round" size="16"></i>BPM 账号</h3>
+              <div class="file-state">BPM 地址由系统统一配置，账号密码仅保存在你的个人设置中。</div>
+            </div>
+            <div class="file-state" id="bpmCredentialAccount">尚未配置 BPM 账号</div>
+            <label>
+              <span>账号</span>
+              <input id="bpmUser" type="text" autocomplete="username" placeholder="输入 BPM 账号">
+            </label>
+            <label>
+              <span>密码</span>
+              <input id="bpmPassword" type="password" autocomplete="new-password" placeholder="保存或更新时必填，不会回显">
+            </label>
+            <div class="top-actions">
+              <button class="primary" id="saveBpmCredentials" type="button"><i data-lucide="save" size="16"></i>保存配置</button>
+              <button class="danger" id="clearBpmCredentials" type="button"><i data-lucide="trash-2" size="16"></i>清除配置</button>
+            </div>
+            <div class="file-state" id="bpmStatus">配置一次后，后续 BPM 任务会自动使用当前账号。</div>
+          </div>
+        </div>
+      </div>
+    </dialog>
 
     <main class="main" id="reportView">
       <div class="topbar">
@@ -1256,23 +1358,12 @@
 
         <aside class="bpm-stack">
           <section class="panel">
-            <h3 class="panel-title"><i data-lucide="key-round" size="16"></i>BPM 配置</h3>
-            <div class="model-form">
-              <div class="file-state">BPM 地址由系统统一配置。</div>
-              <div class="file-state" id="bpmCredentialAccount">尚未配置 BPM 账号</div>
-              <label>
-                <span>账号</span>
-                <input id="bpmUser" type="text" autocomplete="username" placeholder="输入 BPM 账号">
-              </label>
-              <label>
-                <span>密码</span>
-                <input id="bpmPassword" type="password" autocomplete="new-password" placeholder="保存或更新时必填，不会回显">
-              </label>
-              <div class="top-actions">
-                <button class="primary" id="saveBpmCredentials" type="button"><i data-lucide="save" size="16"></i>保存配置</button>
-                <button class="danger" id="clearBpmCredentials" type="button"><i data-lucide="trash-2" size="16"></i>清除配置</button>
+            <div class="bpm-account-state">
+              <div class="bpm-account-copy">
+                <h3 class="panel-title"><i data-lucide="key-round" size="16"></i>BPM 账号</h3>
+                <div class="file-state" id="bpmTaskCredentialStatus">尚未配置 BPM 账号</div>
               </div>
-              <div class="file-state" id="bpmStatus">请选择新增作译者或填报选题；选题只暂存草稿，不办理提交。</div>
+              <button id="openBpmSettingsFromTask" type="button"><i data-lucide="settings" size="16"></i>个人设置</button>
             </div>
           </section>
 
@@ -1281,7 +1372,7 @@
             <ul class="pending-list">
               <li><i data-lucide="circle-alert" size="16"></i><span>填报选题前，六段正文必须全部确认。</span></li>
               <li><i data-lucide="circle-alert" size="16"></i><span>新增作译者只校验作者姓名和作者简介。</span></li>
-              <li><i data-lucide="circle-alert" size="16"></i><span>密码只在本次任务内使用，不写入任务日志。</span></li>
+              <li><i data-lucide="circle-alert" size="16"></i><span>BPM 密码加密保存在个人设置中，不写入任务日志。</span></li>
               <li><i data-lucide="circle-alert" size="16"></i><span>队列只暂存草稿，不点击 BPM 办理提交。</span></li>
             </ul>
           </section>
@@ -1443,7 +1534,9 @@
     const loginError = document.getElementById("loginError");
     const registerError = document.getElementById("registerError");
     const currentUserName = document.getElementById("currentUserName");
+    const bpmSettingsDialog = document.getElementById("bpmSettingsDialog");
     const bpmCredentialAccount = document.getElementById("bpmCredentialAccount");
+    const bpmTaskCredentialStatus = document.getElementById("bpmTaskCredentialStatus");
     const bpmUser = document.getElementById("bpmUser");
     const bpmPassword = document.getElementById("bpmPassword");
     const saveBpmCredentials = document.getElementById("saveBpmCredentials");
@@ -1568,9 +1661,11 @@
 
     function setBpmCredentialStatus(status = {}) {
       bpmCredentialConfigured = Boolean(status.configured);
-      bpmCredentialAccount.textContent = bpmCredentialConfigured
+      const statusText = bpmCredentialConfigured
         ? `已配置 · ${status.accountMasked || "账号已保存"} · 密码已保存`
         : "尚未配置 BPM 账号";
+      bpmCredentialAccount.textContent = statusText;
+      bpmTaskCredentialStatus.textContent = statusText;
       clearBpmCredentials.disabled = !bpmCredentialConfigured;
     }
 
@@ -1587,15 +1682,29 @@
         if (!isCurrentSession(session)) return;
         bpmCredentialConfigured = false;
         bpmCredentialAccount.textContent = "无法读取 BPM 配置";
+        bpmTaskCredentialStatus.textContent = "无法读取 BPM 配置";
         clearBpmCredentials.disabled = true;
         bpmStatus.textContent = error.message || "无法读取 BPM 配置";
       }
     }
 
+    function closeBpmSettingsDialog() {
+      bpmPassword.value = "";
+      if (bpmSettingsDialog.open) bpmSettingsDialog.close();
+    }
+
+    function openBpmSettingsDialog() {
+      if (!currentUser) return;
+      bpmUser.value = "";
+      bpmPassword.value = "";
+      if (!bpmSettingsDialog.open) bpmSettingsDialog.showModal();
+      window.requestAnimationFrame(() => bpmUser.focus());
+    }
+
     function guideBpmCredentialSetup() {
-      bpmStatus.textContent = "请先在 BPM 配置中保存账号和密码。";
-      bpmUser.focus();
-      showToast("请先保存 BPM 配置");
+      bpmStatus.textContent = "请先在个人设置中保存 BPM 账号和密码。";
+      openBpmSettingsDialog();
+      showToast("请先完成个人设置");
     }
 
     function resetFileInput(id) {
@@ -1629,8 +1738,9 @@
       document.getElementById("projectMeta").textContent = "等待上传选题申报表";
       bpmUser.value = "";
       bpmPassword.value = "";
+      if (bpmSettingsDialog.open) bpmSettingsDialog.close();
       setBpmCredentialStatus();
-      document.getElementById("bpmStatus").textContent = "请选择新增作译者或填报选题；选题只暂存草稿，不办理提交。";
+      document.getElementById("bpmStatus").textContent = "配置一次后，后续 BPM 任务会自动使用当前账号。";
       progressPanel.hidden = true;
       progressBar.style.width = "0%";
       bpmProgressPanel.hidden = true;
@@ -2381,9 +2491,14 @@
 
     document.getElementById("menuReport").addEventListener("click", () => switchMainView("report"));
     document.getElementById("menuBpm").addEventListener("click", () => switchMainView("bpm"));
-    document.getElementById("bpmSettingsButton").addEventListener("click", () => {
-      switchMainView("bpm");
-      bpmUser.focus();
+    document.getElementById("bpmSettingsButton").addEventListener("click", openBpmSettingsDialog);
+    document.getElementById("openBpmSettingsFromTask").addEventListener("click", openBpmSettingsDialog);
+    document.getElementById("closeBpmSettings").addEventListener("click", closeBpmSettingsDialog);
+    bpmSettingsDialog.addEventListener("click", (event) => {
+      if (event.target === bpmSettingsDialog) closeBpmSettingsDialog();
+    });
+    bpmSettingsDialog.addEventListener("close", () => {
+      bpmPassword.value = "";
     });
     document.getElementById("refreshBpmJobs").addEventListener("click", () => {
       refreshBpmJobs();
@@ -2417,6 +2532,7 @@
         setBpmCredentialStatus(status);
         bpmStatus.textContent = "BPM 配置已保存。";
         showToast("BPM 配置已保存");
+        closeBpmSettingsDialog();
       } catch (error) {
         if (!isCurrentSession(session)) return;
         bpmStatus.textContent = error.message || "保存 BPM 配置失败";
