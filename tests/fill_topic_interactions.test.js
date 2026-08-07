@@ -13,11 +13,42 @@ const scriptPath = path.join(
 );
 const source = fs.readFileSync(scriptPath, 'utf8');
 const {
+  applyLoggedInBpmEditor,
   ensureEditorIdentity,
   findUniqueBpmPersonLink,
+  readLoggedInBpmProfile,
   selectBpmPerson,
   waitForSavedTopicLink,
 } = require(scriptPath);
+
+function fakeBpmProfilePage(name, department) {
+  let triggerClicks = 0;
+  const trigger = {
+    async waitFor() {},
+    async click() { triggerClicks += 1; },
+  };
+  const panel = {
+    async waitFor() {},
+  };
+  const rows = {
+    nth(index) {
+      return {
+        async innerText() {
+          return index === 0 ? name : department;
+        },
+      };
+    },
+  };
+  return {
+    locator(selector) {
+      if (selector === '#userInfo') return trigger;
+      if (selector === '#editUserInfoPanel.show') return panel;
+      if (selector === '#editUserInfoPanel .edit-user-info-operate-panel > div > div') return rows;
+      throw new Error(`Unexpected selector: ${selector}`);
+    },
+    get triggerClicks() { return triggerClicks; },
+  };
+}
 
 function functionBody(name) {
   const start = source.indexOf(`async function ${name}(`);
@@ -43,6 +74,23 @@ test('submitAuthor only maintains authors', () => {
 test('CLI exposes isolated topic and author modes', () => {
   assert.match(source, /mode === 'submit-author'/);
   assert.match(source, /mode === 'submit-topic'/);
+});
+
+test('BPM profile name overrides the website display name before topic filling', async () => {
+  const page = fakeBpmProfilePage('叶文涛', '高等信息科技事业部');
+  const profile = await readLoggedInBpmProfile(page);
+  const topic = { projectEditor: '网站注册姓名', editor: '网站注册姓名' };
+
+  applyLoggedInBpmEditor(topic, profile);
+
+  assert.deepEqual(profile, { name: '叶文涛', department: '高等信息科技事业部' });
+  assert.equal(topic.projectEditor, '叶文涛');
+  assert.equal(topic.editor, '叶文涛');
+  assert.equal(page.triggerClicks, 2);
+
+  const submitBody = functionBody('submitTopic');
+  assert.ok(submitBody.indexOf('await login(page)') < submitBody.indexOf('readLoggedInBpmProfile(page)'));
+  assert.ok(submitBody.indexOf('readLoggedInBpmProfile(page)') < submitBody.indexOf('openTopicPopup(page)'));
 });
 
 test('BPM form changes use Playwright controls instead of direct DOM or Ext mutation', () => {

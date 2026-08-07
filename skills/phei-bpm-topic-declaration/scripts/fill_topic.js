@@ -764,6 +764,32 @@ async function login(page) {
   await page.waitForTimeout(6000);
 }
 
+async function readLoggedInBpmProfile(page) {
+  const trigger = page.locator('#userInfo');
+  await trigger.waitFor({ state: 'visible', timeout: 15000 });
+  await trigger.click();
+
+  const panel = page.locator('#editUserInfoPanel.show');
+  await panel.waitFor({ state: 'visible', timeout: 10000 });
+  const profileRows = page.locator(
+    '#editUserInfoPanel .edit-user-info-operate-panel > div > div',
+  );
+  const name = String(await profileRows.nth(0).innerText()).trim();
+  const department = String(await profileRows.nth(1).innerText()).trim();
+  await trigger.click().catch(() => {});
+
+  if (!isValidPersonName(name)) {
+    throw new Error(`Could not identify the logged-in BPM user from the profile panel: "${name.slice(0, 40)}"`);
+  }
+  return { name, department };
+}
+
+function applyLoggedInBpmEditor(topic, profile) {
+  topic.projectEditor = profile.name;
+  topic.editor = profile.name;
+  return topic;
+}
+
 async function openAuthorMaintenancePopup(page) {
   await page.locator('li.top-navitem-panel').filter({ hasText: '编辑' }).first().click();
   await page.waitForTimeout(1000);
@@ -1306,6 +1332,8 @@ async function submitTopic(jsonPath) {
     });
 
     await login(page);
+    const bpmProfile = await readLoggedInBpmProfile(page);
+    applyLoggedInBpmEditor(topic, bpmProfile);
     const { popup, formFrame } = await openTopicPopup(page);
     await fillForm(formFrame, topic);
 
@@ -1486,8 +1514,10 @@ async function main() {
 }
 
 module.exports = {
+  applyLoggedInBpmEditor,
   ensureEditorIdentity,
   findUniqueBpmPersonLink,
+  readLoggedInBpmProfile,
   selectBpmPerson,
   waitForSavedTopicLink,
 };

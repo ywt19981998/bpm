@@ -55,9 +55,9 @@ test('server does not synthesize BPM person identifiers from display names', () 
   assert.doesNotMatch(source, /authorMaintenance"\]\["contactorUid"\]/);
 });
 
-test('input schema assigns editor names to the login user and IDs to BPM', () => {
+test('input schema assigns editor names to the BPM profile and IDs to BPM', () => {
   assert.doesNotMatch(inputSchema, /yewt|2024070801/);
   assert.doesNotMatch(inputSchema, /projectEditorNo[\s\S]{0,200}stable defaults/i);
-  assert.match(inputSchema, /projectEditor[\s\S]*editor[\s\S]*登录用户/);
+  assert.match(inputSchema, /projectEditor[\s\S]*editor[\s\S]*BPM[^\n]*个人资料/);
   assert.match(inputSchema, /NO[\s\S]*UID[\s\S]*(?:BPM 页面|人员选择器)/);
 });
