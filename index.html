@@ -1731,6 +1731,21 @@
         <div class="author-badge" id="authorBadge">等待</div>
       </section>
 
+    </main>
+
+    <main class="main" id="bpmView" hidden>
+      <div class="topbar">
+        <div class="title-block">
+          <h1>BPM 填报任务</h1>
+          <p>先核对将写入 BPM 的字段，再加入队列；后台一次只处理一个暂存任务。</p>
+        </div>
+        <div class="top-actions">
+          <button id="refreshBpmJobs"><i data-lucide="refresh-cw" size="16"></i>刷新任务</button>
+          <button id="queueAuthor"><i data-lucide="user-round-plus" size="16"></i>新增作译者</button>
+          <button class="primary" id="queueBpm"><i data-lucide="send" size="16"></i>填报选题</button>
+        </div>
+      </div>
+
       <section class="quick-import">
         <div class="quick-import-head">
           <div>
@@ -1764,20 +1779,6 @@
           </label>
         </div>
       </section>
-    </main>
-
-    <main class="main" id="bpmView" hidden>
-      <div class="topbar">
-        <div class="title-block">
-          <h1>BPM 填报任务</h1>
-          <p>先核对将写入 BPM 的字段，再加入队列；后台一次只处理一个暂存任务。</p>
-        </div>
-        <div class="top-actions">
-          <button id="refreshBpmJobs"><i data-lucide="refresh-cw" size="16"></i>刷新任务</button>
-          <button id="queueAuthor"><i data-lucide="user-round-plus" size="16"></i>新增作译者</button>
-          <button class="primary" id="queueBpm"><i data-lucide="send" size="16"></i>填报选题</button>
-        </div>
-      </div>
 
       <section class="progress-panel" id="bpmProgressPanel" hidden>
         <div class="progress-top">

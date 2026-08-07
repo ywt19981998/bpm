@@ -30,6 +30,16 @@ test('BPM view expands the workspace and hides report-only assistance', () => {
   assert.match(switchBody, /classList\.toggle\("bpm-mode", isBpm\)/);
 });
 
+test('quick BPM import belongs to the BPM task view', () => {
+  const reportStart = source.indexOf('id="reportView"');
+  const bpmStart = source.indexOf('id="bpmView"');
+  const bpmEnd = source.indexOf('<aside class="right">', bpmStart);
+  const quickImport = source.indexOf('<section class="quick-import">');
+
+  assert.ok(reportStart < bpmStart);
+  assert.ok(quickImport > bpmStart && quickImport < bpmEnd);
+});
+
 test('buttons use separate backend endpoints', () => {
   assert.match(source, /apiFetch\("\/api\/bpm-author-jobs"/);
   assert.match(source, /apiFetch\("\/api\/bpm-topic-jobs"/);
