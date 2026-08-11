@@ -30,7 +30,12 @@ from docx import Document
 from dotenv import load_dotenv
 
 from app_storage import AppStore, ProjectVersionConflict
-from project_domain import build_bpm_preflight, normalize_project_state, summarize_project_state
+from project_domain import (
+    build_bpm_preflight,
+    normalize_project_state,
+    project_state_from_report,
+    summarize_project_state,
+)
 from project_files import InvalidProjectFile, ProjectFileStore
 
 
@@ -1077,10 +1082,106 @@ def business_bpm_payload(payload: dict) -> dict:
     return business_payload
 
 
+def project_report_payload(project: dict, user: dict) -> dict:
+    summary = summarize_project_state(project.get("state") or {}, user["display_name"])
+    state = summary["state"]
+    scores = state["scoreItems"]
+    total = 0
+    for item in scores:
+        try:
+            total += float(item[2])
+        except (TypeError, ValueError, IndexError):
+            pass
+    if float(total).is_integer():
+        total = int(total)
+    return {
+        "projectId": project["id"],
+        "title": summary["title"],
+        "editorName": user["display_name"],
+        "createdBy": user["display_name"],
+        "sections": state["sections"],
+        "scores": scores,
+        "scoreItems": scores,
+        "total": total,
+        "bpmTopic": state["bpmTopic"],
+        "authorMaintenance": state["authorMaintenance"],
+    }
+
+
+def load_project_job_payload(user: dict, project_id: str, job_type: str) -> tuple[dict, dict]:
+    if not isinstance(project_id, str) or not project_id.strip():
+        raise ValueError("请先选择要处理的选题项目。")
+    project = APP_STORE.get_project(user["id"], project_id.strip())
+    if project is None or project.get("archivedAt"):
+        raise ValueError("未找到当前用户的选题项目。")
+    payload = project_report_payload(project, user)
+    if job_type == "topic":
+        preflight = build_bpm_preflight(
+            payload_to_project_state(payload),
+            bpm_configured=APP_STORE.has_integration_credentials(user["id"], "phei_bpm"),
+        )
+        if not preflight["ready"]:
+            blockers = [
+                row["label"]
+                for row in preflight["rows"]
+                if row["status"] == "blocking_missing"
+            ]
+            raise ValueError("项目尚未通过 BPM 预检：" + "、".join(blockers))
+    return payload, project
+
+
+def payload_to_project_state(payload: dict) -> dict:
+    return normalize_project_state(
+        {
+            "sections": payload.get("sections"),
+            "scoreItems": payload.get("scoreItems", payload.get("scores")),
+            "bpmTopic": payload.get("bpmTopic"),
+            "authorMaintenance": payload.get("authorMaintenance"),
+        }
+    )
+
+
+def update_project_job_status(
+    user_id: int, project_id: str | None, job_type: str, status: str
+) -> None:
+    if not project_id:
+        return
+    status_key = "author_status" if job_type == "author" else "bpm_status"
+    for _ in range(3):
+        project = APP_STORE.get_project(user_id, project_id)
+        if project is None:
+            return
+        try:
+            APP_STORE.update_project(
+                user_id,
+                project_id,
+                project["version"],
+                {status_key: status},
+            )
+            return
+        except ProjectVersionConflict:
+            continue
+        except Exception as error:
+            runtime_log(
+                f"project status update failure project={project_id} status={status} "
+                f"type={type(error).__name__}"
+            )
+            return
+    runtime_log(f"project status update conflict project={project_id} status={status}")
+
+
 def create_bpm_job(payload: dict, user: dict, job_type: str = "topic") -> dict:
     if job_type not in {"topic", "author"}:
         raise ValueError(f"不支持的 BPM 任务类型：{job_type}")
-    business_payload = business_bpm_payload(payload)
+    requested_project_id = payload.get("projectId") if isinstance(payload, dict) else None
+    project = None
+    if requested_project_id:
+        trusted_project_payload, project = load_project_job_payload(
+            user, requested_project_id, job_type
+        )
+        business_payload = business_bpm_payload(trusted_project_payload)
+    else:
+        business_payload = business_bpm_payload(payload)
     if not APP_STORE.has_integration_credentials(user["id"], "phei_bpm"):
         raise ValueError("请先保存 BPM 账号和密码。")
     validation_payload = deepcopy(business_payload)
@@ -1113,9 +1214,13 @@ def create_bpm_job(payload: dict, user: dict, job_type: str = "topic") -> dict:
             "createdBy": user["display_name"],
             "topicPreview": bpm_topic_preview(topic),
         },
+        project_id=None if project is None else project["id"],
     )
     job_id = job["id"]
     APP_STORE.append_job_log(job_id, user_id, f"已加入{job_label}队列")
+    if project is not None:
+        business_payload["projectId"] = project["id"]
+        update_project_job_status(user_id, project["id"], job_type, "queued")
     JOB_QUEUE.put((job_id, user_id, job_type, business_payload))
     return APP_STORE.list_jobs(user_id, limit=1)[0]
 
@@ -1146,6 +1251,8 @@ def process_bpm_job(job_id: str, user_id: int, job_type: str, payload: dict):
     trusted_payload = {}
     credentials = {}
     update_bpm_job(job_id, user_id, "running")
+    project_id = payload.get("projectId") if isinstance(payload, dict) else None
+    update_project_job_status(user_id, project_id, job_type, "running")
     try:
         user = APP_STORE.get_user_by_id(user_id)
         if not user:
@@ -1160,11 +1267,13 @@ def process_bpm_job(job_id: str, user_id: int, job_type: str, payload: dict):
         )
         public_result = redact_bpm_secret(result, password)
         update_bpm_job(job_id, user_id, "succeeded", result=public_result)
+        update_project_job_status(user_id, project_id, job_type, "succeeded")
         title = result.get("authorName") or result.get("title") or result.get("expectedBookName") or job_label
         append_bpm_job_log(job_id, user_id, f"{job_label}完成：{redact_bpm_secret(str(title), password)}")
     except Exception as error:
         error_summary = redact_bpm_secret(str(error), password)
         update_bpm_job(job_id, user_id, "failed", error_summary=error_summary)
+        update_project_job_status(user_id, project_id, job_type, "failed")
         append_bpm_job_log(job_id, user_id, f"{job_label}失败：{error_summary}")
     finally:
         clear_bpm_job_password(trusted_payload)
@@ -1773,6 +1882,79 @@ class Handler(BaseHTTPRequestHandler):
             "createdAt": file_record["createdAt"],
         }
 
+    @staticmethod
+    def project_source_file(file_record: dict) -> dict:
+        return {
+            "fileId": file_record["id"],
+            "kind": file_record["kind"],
+            "originalName": file_record["originalName"],
+            "sha256": file_record["sha256"],
+            "sizeBytes": file_record["sizeBytes"],
+        }
+
+    def save_project_docx(
+        self,
+        user: dict,
+        project_id: str,
+        kind: str,
+        filename: str,
+        content: bytes,
+    ) -> dict:
+        file_id = uuid.uuid4().hex
+        stored = PROJECT_FILE_STORE.save_docx(
+            user["id"], project_id, file_id, content
+        )
+        try:
+            return APP_STORE.add_project_file(
+                user["id"],
+                project_id,
+                file_id,
+                kind,
+                filename,
+                stored.relative_path,
+                stored.sha256,
+                stored.size_bytes,
+            )
+        except Exception:
+            PROJECT_FILE_STORE.remove(stored.relative_path)
+            raise
+
+    def rollback_project_file(self, user: dict, project_id: str, record: dict):
+        try:
+            APP_STORE.delete_project_file(user["id"], project_id, record["id"])
+        finally:
+            PROJECT_FILE_STORE.remove(record["storagePath"])
+
+    def persist_project_report(
+        self,
+        user: dict,
+        project: dict,
+        result: dict,
+        *,
+        source_kind: str,
+        source_files: dict,
+        expected_version: int | None = None,
+        revision_reason: str,
+    ) -> dict:
+        state = project_state_from_report(result, source_kind=source_kind)
+        state["sourceFiles"].update(source_files)
+        summary = summarize_project_state(state, user["display_name"])
+        return APP_STORE.update_project(
+            user["id"],
+            project["id"],
+            project["version"] if expected_version is None else expected_version,
+            {
+                "title": summary["title"],
+                "author_name": summary["authorName"],
+                "editor_name": summary["editorName"],
+                "report_status": summary["reportStatus"],
+                "author_status": summary["authorStatus"],
+                "bpm_status": summary["bpmStatus"],
+                "state": summary["state"],
+            },
+            revision_reason=revision_reason,
+        )
+
     def project_payload(self, user: dict, project: dict, *, include_preflight: bool = False):
         payload = {
             "project": project,
@@ -1957,6 +2139,89 @@ class Handler(BaseHTTPRequestHandler):
                 PROJECT_FILE_STORE.remove(stored.relative_path)
             self.send_json(400, {"error": str(error), "code": "PROJECT_FILE_INVALID"})
 
+    def handle_project_import(self, user: dict):
+        project = None
+        records = []
+        try:
+            form = read_multipart_form(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={
+                    "REQUEST_METHOD": "POST",
+                    "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+                    "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
+                },
+            )
+            application_item = form["application"] if "application" in form else None
+            report_item = form["report"] if "report" in form else None
+            if application_item is None or not getattr(application_item, "file", None):
+                raise ValueError("请上传选题申报表 DOCX。")
+            if report_item is None or not getattr(report_item, "file", None):
+                raise ValueError("请上传选题策划报告 DOCX。")
+            application_bytes = application_item.file.read()
+            report_bytes = report_item.file.read()
+            application_name = getattr(application_item, "filename", "application.docx")
+            report_name = getattr(report_item, "filename", "report.docx")
+            result = import_bpm_sources(
+                application_bytes,
+                application_name,
+                report_bytes,
+                report_name,
+            )
+            initial_state = project_state_from_report(result, source_kind="imported")
+            initial_summary = summarize_project_state(initial_state, user["display_name"])
+            project = APP_STORE.create_project(
+                user["id"],
+                initial_summary["title"],
+                initial_summary["state"],
+                author_name=initial_summary["authorName"],
+                editor_name=initial_summary["editorName"],
+                report_status=initial_summary["reportStatus"],
+                author_status=initial_summary["authorStatus"],
+                bpm_status=initial_summary["bpmStatus"],
+            )
+            application_record = self.save_project_docx(
+                user,
+                project["id"],
+                "application",
+                application_name,
+                application_bytes,
+            )
+            records.append(application_record)
+            report_record = self.save_project_docx(
+                user,
+                project["id"],
+                "confirmed_report",
+                report_name,
+                report_bytes,
+            )
+            records.append(report_record)
+            project = self.persist_project_report(
+                user,
+                project,
+                result,
+                source_kind="imported",
+                source_files={
+                    "application": self.project_source_file(application_record),
+                    "report": self.project_source_file(report_record),
+                },
+                revision_reason="quick_import",
+            )
+            response = dict(result)
+            response.update(self.project_payload(user, project, include_preflight=True))
+            self.send_json(201, response)
+        except (InvalidProjectFile, TypeError, ValueError, json.JSONDecodeError) as error:
+            if project is not None:
+                for record in reversed(records):
+                    self.rollback_project_file(user, project["id"], record)
+            self.send_json(400, {"error": str(error), "code": "PROJECT_IMPORT_INVALID"})
+        except Exception as error:
+            if project is not None:
+                for record in reversed(records):
+                    self.rollback_project_file(user, project["id"], record)
+            runtime_log(f"project-import error {type(error).__name__}: {error}")
+            self.send_json(500, {"error": str(error), "code": "PROJECT_IMPORT_FAILED"})
+
     def handle_project_file_download(
         self, user: dict, project_id: str, file_id: str
     ):
@@ -2068,6 +2333,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/projects":
             self.handle_project_create(user)
             return
+        if path == "/api/projects/import":
+            self.handle_project_import(user)
+            return
         project_match = self.project_api_match(path)
         if project_match:
             project_id, action, file_id = project_match.groups()
@@ -2097,11 +2365,56 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             payload = self.read_json()
-            payload["editorName"] = user["display_name"]
-            payload["createdBy"] = user["display_name"]
-            out = build_docx(payload)
+            project_id = payload.get("projectId")
+            project = None
+            export_payload = payload
+            if project_id:
+                project = APP_STORE.get_project(user["id"], str(project_id))
+                if project is None or project.get("archivedAt"):
+                    self.send_json(
+                        404,
+                        {"error": "未找到选题项目。", "code": "PROJECT_NOT_FOUND"},
+                    )
+                    return
+                export_payload = project_report_payload(project, user)
+            else:
+                export_payload["editorName"] = user["display_name"]
+                export_payload["createdBy"] = user["display_name"]
+            out = build_docx(export_payload)
             data = out.read_bytes()
             filename = out.name
+            if project is not None:
+                record = self.save_project_docx(
+                    user,
+                    project["id"],
+                    "exported_report",
+                    filename,
+                    data,
+                )
+                try:
+                    latest = APP_STORE.get_project(user["id"], project["id"])
+                    state = normalize_project_state(latest["state"])
+                    state["docxExported"] = True
+                    state["sourceFiles"]["exportedReport"] = self.project_source_file(record)
+                    summary = summarize_project_state(state, user["display_name"])
+                    APP_STORE.update_project(
+                        user["id"],
+                        project["id"],
+                        latest["version"],
+                        {
+                            "title": summary["title"],
+                            "author_name": summary["authorName"],
+                            "editor_name": summary["editorName"],
+                            "report_status": summary["reportStatus"],
+                            "author_status": summary["authorStatus"],
+                            "bpm_status": summary["bpmStatus"],
+                            "state": summary["state"],
+                        },
+                        revision_reason="export_docx",
+                    )
+                except Exception:
+                    self.rollback_project_file(user, project["id"], record)
+                    raise
             self.send_response(200)
             self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
             self.send_header("Content-Length", str(len(data)))
@@ -2178,9 +2491,52 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("请上传选题申报表 DOCX 文件。")
             file_bytes = file_item.file.read()
             filename = getattr(file_item, "filename", "application.docx")
+            project_id = form.getfirst("projectId", "")
+            if isinstance(project_id, bytes):
+                project_id = project_id.decode("utf-8")
+            project = None
+            user = self.current_user()
+            expected_version = None
+            if project_id:
+                project = APP_STORE.get_project(user["id"], str(project_id)) if user else None
+                if project is None or project.get("archivedAt"):
+                    self.send_json(
+                        404,
+                        {"error": "未找到选题项目。", "code": "PROJECT_NOT_FOUND"},
+                    )
+                    return
+                raw_version = form.getfirst("version", "")
+                if isinstance(raw_version, bytes):
+                    raw_version = raw_version.decode("utf-8")
+                expected_version = int(raw_version) if str(raw_version).strip() else project["version"]
             runtime_log(f"generate-report file filename={filename} bytes={len(file_bytes)}")
             result = generate_report_from_upload(file_bytes, filename)
-            body = json.dumps(result, ensure_ascii=False).encode("utf-8")
+            response = dict(result)
+            if project is not None:
+                record = self.save_project_docx(
+                    user,
+                    project["id"],
+                    "application",
+                    filename,
+                    file_bytes,
+                )
+                try:
+                    project = self.persist_project_report(
+                        user,
+                        project,
+                        result,
+                        source_kind="generated",
+                        source_files={
+                            "application": self.project_source_file(record),
+                        },
+                        expected_version=expected_version,
+                        revision_reason="generated_report",
+                    )
+                except Exception:
+                    self.rollback_project_file(user, project["id"], record)
+                    raise
+                response.update(self.project_payload(user, project, include_preflight=True))
+            body = json.dumps(response, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))

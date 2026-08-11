@@ -8,6 +8,7 @@ import threading
 import unittest
 from pathlib import Path
 from urllib.parse import quote
+from unittest import mock
 
 from docx import Document
 
@@ -135,6 +136,31 @@ class ServerProjectApiTests(unittest.TestCase):
                 f"--{boundary}--\r\n".encode(),
             )
         )
+        return b"".join(parts), {"Content-Type": f"multipart/form-data; boundary={boundary}"}
+
+    def multipart_files(self, fields, files):
+        boundary = "ProjectMultiBoundary"
+        parts = []
+        for name, value in fields.items():
+            parts.extend(
+                (
+                    f"--{boundary}\r\n".encode(),
+                    f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(),
+                    str(value).encode("utf-8"),
+                    b"\r\n",
+                )
+            )
+        for name, filename, content in files:
+            parts.extend(
+                (
+                    f"--{boundary}\r\n".encode(),
+                    f'Content-Disposition: form-data; name="{name}"; filename="{filename}"\r\n'.encode(),
+                    b"Content-Type: application/vnd.openxmlformats-officedocument.wordprocessingml.document\r\n\r\n",
+                    content,
+                    b"\r\n",
+                )
+            )
+        parts.append(f"--{boundary}--\r\n".encode())
         return b"".join(parts), {"Content-Type": f"multipart/form-data; boundary={boundary}"}
 
     def create_project(self, *, title="测试选题", state=None, cookie=None):
@@ -289,6 +315,137 @@ class ServerProjectApiTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(body["preflight"]["ready"])
         self.assertNotIn("bpm-password", json.dumps(body, ensure_ascii=False))
+
+    def test_generation_persists_report_and_application_file_in_project(self):
+        project = self.create_project(title="人工智能通识")
+        generated = confirmed_project_state()
+        for section in generated["sections"]:
+            section["confirmed"] = False
+        generated.update(
+            {
+                "title": "人工智能通识",
+                "scores": generated.pop("scoreItems"),
+                "total": 65,
+            }
+        )
+        content = valid_docx_bytes("选题申报表")
+        payload, headers = self.multipart(
+            {"projectId": project["id"], "version": project["version"]},
+            filename="人工智能通识-申报表.docx",
+            content=content,
+        )
+
+        with mock.patch.object(server, "generate_report_from_upload", return_value=generated):
+            status, _, raw = self.request(
+                "POST", "/api/generate-report", payload, self.cookie, headers
+            )
+
+        self.assertEqual(status, 200)
+        body = json.loads(raw.decode("utf-8"))
+        self.assertEqual(body["project"]["reportStatus"], "draft")
+        self.assertEqual(body["project"]["editorName"], "张编辑")
+        self.assertEqual(body["project"]["state"]["bpmTopic"]["projectEditor"], "张编辑")
+        self.assertEqual(len(body["files"]), 1)
+        self.assertEqual(body["files"][0]["kind"], "application")
+        self.assertEqual(
+            body["project"]["state"]["sourceFiles"]["application"]["fileId"],
+            body["files"][0]["id"],
+        )
+
+    def test_quick_import_creates_confirmed_project_with_both_source_files(self):
+        imported = confirmed_project_state()
+        imported.update(
+            {
+                "title": "数据库系统",
+                "scores": imported.pop("scoreItems"),
+                "total": 65,
+            }
+        )
+        imported["bpmTopic"]["bookName"] = "数据库系统"
+        payload, headers = self.multipart_files(
+            {},
+            [
+                ("application", "数据库-申报表.docx", valid_docx_bytes("申报表")),
+                ("report", "数据库-策划报告.docx", valid_docx_bytes("策划报告")),
+            ],
+        )
+
+        with mock.patch.object(server, "import_bpm_sources", return_value=imported):
+            status, _, raw = self.request(
+                "POST", "/api/projects/import", payload, self.cookie, headers
+            )
+
+        self.assertEqual(status, 201)
+        body = json.loads(raw.decode("utf-8"))
+        self.assertEqual(body["project"]["title"], "数据库系统")
+        self.assertEqual(body["project"]["reportStatus"], "confirmed")
+        self.assertEqual(body["project"]["bpmStatus"], "ready")
+        self.assertEqual(
+            {item["kind"] for item in body["files"]},
+            {"application", "confirmed_report"},
+        )
+        self.assertEqual(
+            set(body["project"]["state"]["sourceFiles"]), {"application", "report"}
+        )
+
+    def test_project_export_uses_saved_state_and_records_download(self):
+        project = self.create_project(title="人工智能通识", state=confirmed_project_state())
+        output = Path(self.temp_dir.name) / "项目策划报告.docx"
+        output.write_bytes(valid_docx_bytes("导出内容"))
+
+        with mock.patch.object(server, "build_docx", return_value=output) as build:
+            status, headers, body = self.request(
+                "POST",
+                "/api/export-docx",
+                {"projectId": project["id"], "title": "伪造标题"},
+                self.cookie,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body, output.read_bytes())
+        self.assertIn("attachment", headers["Content-Disposition"])
+        export_payload = build.call_args.args[0]
+        self.assertEqual(export_payload["title"], "人工智能通识")
+        self.assertEqual(export_payload["editorName"], "张编辑")
+        refreshed = server.APP_STORE.get_project(self.user_id(), project["id"])
+        self.assertTrue(refreshed["state"]["docxExported"])
+        self.assertEqual(
+            [item["kind"] for item in server.APP_STORE.list_project_files(self.user_id(), project["id"])],
+            ["exported_report"],
+        )
+
+    def test_project_job_uses_trusted_saved_state_and_tracks_project(self):
+        project = self.create_project(title="人工智能通识", state=confirmed_project_state())
+        server.APP_STORE.put_integration_credentials(
+            self.user_id(), "phei_bpm", "editor-bpm", "bpm-password"
+        )
+        captured = []
+
+        with mock.patch.object(server.JOB_QUEUE, "put", side_effect=captured.append):
+            status, _, body = self.json_request(
+                "POST",
+                "/api/bpm-topic-jobs",
+                {
+                    "projectId": project["id"],
+                    "title": "伪造标题",
+                    "bpmTopic": {"bookName": "伪造选题", "projectEditor": "伪造编辑"},
+                    "userId": 999,
+                },
+                self.cookie,
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(body["projectId"], project["id"])
+        queued_payload = captured[0][3]
+        self.assertEqual(queued_payload["title"], "人工智能通识")
+        self.assertEqual(queued_payload["bpmTopic"]["bookName"], "人工智能通识")
+        self.assertEqual(queued_payload["bpmTopic"]["projectEditor"], "张编辑")
+        self.assertNotIn("userId", queued_payload)
+        self.assertNotIn("bpm", queued_payload)
+        self.assertEqual(
+            server.APP_STORE.get_project(self.user_id(), project["id"])["bpmStatus"],
+            "queued",
+        )
 
     def user_id(self):
         return server.APP_STORE.authenticate_user("editor01", "S3cure-pass")["id"]

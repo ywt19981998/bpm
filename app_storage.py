@@ -866,6 +866,27 @@ class AppStore:
             ).fetchall()
         return [self._project_file_from_row(row) for row in rows]
 
+    def delete_project_file(
+        self, user_id: int, project_id: str, file_id: str
+    ) -> dict | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT pf.*
+                FROM project_files AS pf
+                JOIN projects AS p ON p.id = pf.project_id
+                WHERE pf.id = ? AND pf.project_id = ? AND p.user_id = ?
+                """,
+                (file_id, project_id, user_id),
+            ).fetchone()
+            if row is None:
+                return None
+            connection.execute(
+                "DELETE FROM project_files WHERE id = ? AND project_id = ?",
+                (file_id, project_id),
+            )
+        return self._project_file_from_row(row)
+
     @staticmethod
     def _job_timestamp() -> int:
         return time.time_ns() // 1_000_000
