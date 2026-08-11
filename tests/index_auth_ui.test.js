@@ -115,7 +115,7 @@ test("untrusted report and job values are rendered as text instead of HTML", () 
   assert.doesNotMatch(source, /\.innerHTML\s*=/);
   assert.match(source, /valueNode\.textContent = String\(value \|\| "未填写"\)/);
   assert.match(source, /jobTitle\.textContent = job\.title \|\| "未命名选题"/);
-  assert.match(source, /jobLog\.textContent = logs/);
+  assert.match(source, /jobLog\.textContent = `\$\{logs\}\$\{milestoneCopy\}`\.trim\(\)/);
 });
 
 test("async workspace operations capture and verify the active session generation", () => {

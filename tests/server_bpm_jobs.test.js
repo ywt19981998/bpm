@@ -34,6 +34,12 @@ test('worker dispatches jobs by explicit type', () => {
   assert.match(source, /job_type\s*==\s*"author"/);
   assert.match(source, /APP_STORE\.create_job\(\s*user_id,\s*job_type,/s);
   assert.match(source, /update_bpm_job\(job_id,\s*user_id,\s*"succeeded"/);
+  assert.match(functionBody('process_bpm_job'), /worklist_verified/);
+  assert.ok(
+    functionBody('process_bpm_job').indexOf('worklist_verified')
+      < functionBody('process_bpm_job').indexOf('update_bpm_job(job_id, user_id, "succeeded"'),
+    'topic jobs must verify the worklist milestone before being marked succeeded',
+  );
 });
 
 test('BPM jobs use authenticated server-side credentials', () => {

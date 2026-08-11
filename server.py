@@ -923,6 +923,12 @@ def merge_bpm_topic(payload: dict) -> dict:
     return topic
 
 
+class BpmRunError(RuntimeError):
+    def __init__(self, message: str, *, result: dict | None = None):
+        super().__init__(message)
+        self.result = result if isinstance(result, dict) else None
+
+
 def run_bpm_script(payload: dict, mode: str, failure_label: str) -> dict:
     if not BPM_SCRIPT.exists():
         raise FileNotFoundError(f"BPM skill 脚本不存在: {BPM_SCRIPT}")
@@ -961,21 +967,50 @@ def run_bpm_script(payload: dict, mode: str, failure_label: str) -> dict:
     )
     (run_dir / "stdout.txt").write_text(completed.stdout or "", encoding="utf-8")
     (run_dir / "stderr.txt").write_text(completed.stderr or "", encoding="utf-8")
+    result = None
+    if completed.stdout.strip():
+        try:
+            parsed = json.loads(completed.stdout)
+            if isinstance(parsed, dict):
+                result = parsed
+                result["runDir"] = str(run_dir)
+        except json.JSONDecodeError:
+            result = None
     if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip() or f"{failure_label}失败"
-        raise RuntimeError(f"{detail}\n运行记录已保存：{run_dir}")
-    result = json.loads(completed.stdout)
-    result["runDir"] = str(run_dir)
+        detail = (
+            str((result or {}).get("error") or "").strip()
+            or completed.stderr.strip()
+            or completed.stdout.strip()
+            or f"{failure_label}失败"
+        )
+        raise BpmRunError(
+            f"{detail}\n运行记录已保存：{run_dir}", result=result
+        )
+    if result is None:
+        raise BpmRunError(
+            f"{failure_label}返回结果无法解析。运行记录已保存：{run_dir}"
+        )
     if not result.get("ok"):
-        raise RuntimeError(f"{failure_label}未验证成功。运行记录已保存：{run_dir}")
+        raise BpmRunError(
+            f"{failure_label}未验证成功。运行记录已保存：{run_dir}",
+            result=result,
+        )
     return result
 
 
 def run_bpm_topic_submit(payload: dict) -> dict:
     result = run_bpm_script(payload, "submit-topic", "BPM 选题暂存")
+    if "worklist_verified" not in result.get("milestones", []):
+        raise BpmRunError(
+            "BPM 选题暂存未完成工作列表验证（缺少 worklist_verified）。",
+            result=result,
+        )
     if not result.get("title"):
         expected = result.get("expectedBookName") or merge_bpm_topic(payload).get("bookName") or "选题"
-        raise RuntimeError(f"BPM 选题暂存未验证成功：没有在待办列表找到《{expected}》。")
+        raise BpmRunError(
+            f"BPM 选题暂存未验证成功：没有在待办列表找到《{expected}》。",
+            result=result,
+        )
     return result
 
 
@@ -1265,6 +1300,11 @@ def process_bpm_job(job_id: str, user_id: int, job_type: str, payload: dict):
             if job_type == "author"
             else run_bpm_topic_submit(trusted_payload)
         )
+        if job_type == "topic" and "worklist_verified" not in result.get("milestones", []):
+            raise BpmRunError(
+                "BPM 选题填报缺少 worklist_verified 里程碑，不能标记为成功。",
+                result=result,
+            )
         public_result = redact_bpm_secret(result, password)
         update_bpm_job(job_id, user_id, "succeeded", result=public_result)
         update_project_job_status(user_id, project_id, job_type, "succeeded")
@@ -1272,7 +1312,15 @@ def process_bpm_job(job_id: str, user_id: int, job_type: str, payload: dict):
         append_bpm_job_log(job_id, user_id, f"{job_label}完成：{redact_bpm_secret(str(title), password)}")
     except Exception as error:
         error_summary = redact_bpm_secret(str(error), password)
-        update_bpm_job(job_id, user_id, "failed", error_summary=error_summary)
+        failure_result = getattr(error, "result", None)
+        public_failure_result = redact_bpm_secret(failure_result, password)
+        update_bpm_job(
+            job_id,
+            user_id,
+            "failed",
+            result=public_failure_result,
+            error_summary=error_summary,
+        )
         update_project_job_status(user_id, project_id, job_type, "failed")
         append_bpm_job_log(job_id, user_id, f"{job_label}失败：{error_summary}")
     finally:

@@ -3837,6 +3837,17 @@
         const cards = jobs.map((job) => {
           const logs = (job.logs || []).slice(-4).join("\n");
           const jobType = job.type === "author" ? "作译者维护" : "选题填报";
+          const milestoneLabels = {
+            login_verified: "登录",
+            topic_form_opened: "打开选题表",
+            topic_draft_saved: "暂存选题",
+            cost_estimate_saved: "保存成本估算",
+            worklist_verified: "工作列表回查"
+          };
+          const milestones = Array.isArray(job.result?.milestones) ? job.result.milestones : [];
+          const milestoneCopy = milestones.length
+            ? `\n已验证：${milestones.map((item) => milestoneLabels[item] || item).join(" → ")}`
+            : "";
           const card = document.createElement("article");
           const head = document.createElement("div");
           const jobTitle = document.createElement("div");
@@ -3853,7 +3864,7 @@
           meta.className = "job-meta";
           meta.textContent = `${jobType} · 发起人：${job.createdBy || "未知"} · 创建：${job.createdAt || ""}`;
           jobLog.className = "job-log";
-          jobLog.textContent = logs;
+          jobLog.textContent = `${logs}${milestoneCopy}`.trim();
           head.append(jobTitle, status);
           card.append(head, meta, jobLog);
           return card;
@@ -3885,7 +3896,7 @@
         return true;
       } catch (error) {
         if (!isCurrentSession(session)) return false;
-        throw new Error(`后端连接失败：${location.origin || "当前页面"}，请确认网站服务窗口没有关闭，并使用 http://10.10.35.19:4174/index.html 打开。`);
+        throw new Error(`后端连接失败：${location.origin || "当前页面"}，请确认网站服务窗口没有关闭，并通过服务启动后显示的地址重新打开。`);
       }
     }
 

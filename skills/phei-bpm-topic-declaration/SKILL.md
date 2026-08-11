@@ -125,11 +125,19 @@ The script already:
 - clicks `暂存`
 - re-reads the worklist to verify the saved title
 
+Topic results include ordered verification milestones:
+
+- `login_verified`
+- `topic_form_opened`
+- `topic_draft_saved`
+- `cost_estimate_saved`
+- `worklist_verified`
+
 `inspect` mode opens the same form and captures fields/screenshots, but does not click `暂存`.
 
 If verification fails, inspect screenshots written next to the JSON file and report the blocker.
 
-For the web app queue, do not mark a job completed just because the Node process returned JSON. 选题任务 is successful only when the returned JSON has `ok: true` and a non-empty verified `title`. 作译者任务 is successful only when the returned JSON has `ok: true` and a non-empty `authorName`. If the required result is missing, mark that job failed. Preserve the run's `topic.json`, stdout/stderr, and screenshots under the web app's `output/bpm-runs/` directory for diagnosis.
+For the web app queue, do not mark a job completed just because the Node process returned JSON. 选题任务 is successful only when the returned JSON has `ok: true`, a non-empty verified `title`, and the final `worklist_verified` milestone. 作译者任务 is successful only when the returned JSON has `ok: true` and a non-empty `authorName`. If the required result is missing, mark that job failed. Preserve completed milestones even on failure, together with the run's `topic.json`, stdout/stderr, and screenshots under the web app's `output/bpm-runs/` directory for diagnosis.
 
 ## Safety
 

@@ -55,6 +55,18 @@ ipconfig getifaddr en0
 
 BPM 凭据按用户隔离并以 `APP_CREDENTIAL_KEY` 加密保存。后端仅在当前用户发起的 BPM 任务进程内解密使用，不将明文写入任务记录或 API 响应。不要把 BPM 密码放进浏览器草稿、日志或仓库文件。
 
+## 选题项目工作流
+
+登录后默认进入“选题项目”。每个项目独立保存申报表、已确认策划报告、六段正文、评分、作译者状态、BPM 状态和导出的 DOCX。可以按选题名、作者或编辑搜索，也可以按状态筛选和归档。
+
+正文和评分在停止输入约 700 毫秒后自动保存，页面顶部会显示“未保存”“正在保存”或“已保存”。同一项目在其他窗口被更新时，当前窗口会显示“版本冲突”；此时重新从项目列表打开项目，再继续编辑，避免覆盖较新的内容。
+
+旧版浏览器草稿在登录后只提示迁移一次。只有服务端成功创建新项目后，旧草稿才会从浏览器删除；若迁移失败，原草稿仍保留。没有申报表的迁移项目会明确记录来源文件缺失。
+
+进入 BPM 工作区前，系统会从服务端项目生成填报前检查表，列出字段内容、来源和状态。只有六段正文、评分、选题名称、策划编辑及 BPM 账号等必填项全部就绪，才允许加入选题填报队列。浏览器入队时只发送项目 ID，后端始终读取当前用户已保存的项目数据。
+
+BPM 选题任务按五个已验证里程碑记录结果：`login_verified`、`topic_form_opened`、`topic_draft_saved`、`cost_estimate_saved`、`worklist_verified`。只有最后一次在工作列表回查到选题后才标记成功；失败任务仍保留已经完成的里程碑和运行目录，便于定位卡在哪一步。
+
 ## DeepSeek 服务端配置
 
 所有用户共享服务端的 DeepSeek 配置；网页不提供模型 URL、模型名称或 API Key 输入。`.env.example` 给出默认值：
@@ -67,28 +79,33 @@ BPM 凭据按用户隔离并以 `APP_CREDENTIAL_KEY` 加密保存。后端仅在
 
 ## 数据备份与恢复
 
-本地 SQLite 数据库默认是 `data/app.db`，其中包含用户、会话、任务历史和加密后的 BPM 凭据；该目录已被 Git 忽略。每天备份前先停止服务，再复制数据库：
+本地数据由两部分组成，必须作为一个整体备份：
+
+- `data/app.db`：用户、会话、项目状态、任务历史和加密后的 BPM 凭据。
+- `data/projects/`：各用户项目上传和生成的 DOCX 文件。
+
+`data/` 已被 Git 忽略。为保证数据库记录与文件一致，备份前先停止服务，再复制整个目录：
 
 ```bash
 mkdir -p backups
-cp data/app.db backups/app-$(date +%F).db
+cp -R data "backups/data-$(date +%F-%H%M%S)"
 ```
 
-服务不能停止时，使用 SQLite 的在线备份功能，避免直接复制正在写入的数据库：
+也可以打成一个归档文件：
 
 ```bash
 mkdir -p backups
-sqlite3 data/app.db ".backup backups/app-$(date +%F).db"
+tar -czf "backups/phei-data-$(date +%F-%H%M%S).tar.gz" data
 ```
 
-恢复前必须停止服务，并先保留当前数据库的回滚副本；随后将指定备份复制回 `data/app.db`，再启动服务。恢复加密的 BPM 凭据还需要备份创建时的同一个 `APP_CREDENTIAL_KEY`。不要把数据库备份和 `.env` 一起上传到 Git、邮件或共享网盘。
+不要在服务仍在写入时分别复制数据库和项目目录，否则可能出现数据库有文件记录但文件缺失的情况。恢复前必须停止服务，并先保留当前 `data/` 的回滚副本；随后整体恢复备份目录，再启动服务。恢复加密的 BPM 凭据还需要备份创建时的同一个 `APP_CREDENTIAL_KEY`。不要把数据备份和 `.env` 一起上传到 Git、邮件或共享网盘。
 
 ## 自动化验证
 
 安装依赖后可运行完整本地测试：
 
 ```bash
-python3 -m unittest tests.test_app_storage tests.test_server_auth tests.test_digital_contract_intake_form -v
+python3 -m unittest discover -s tests -p 'test_*.py' -q
 npm test
 git diff --check
 ```

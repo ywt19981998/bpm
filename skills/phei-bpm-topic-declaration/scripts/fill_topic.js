@@ -1324,6 +1324,12 @@ async function submitTopic(jsonPath) {
   const browser = await chromium.launch({ headless: true });
   const page = await browser.newPage({ viewport: { width: 1600, height: 1400 } });
   const dialogs = [];
+  const milestones = [];
+  const markMilestone = (name) => {
+    if (!milestones.includes(name)) milestones.push(name);
+  };
+  let cno = '';
+  let verification = null;
 
   try {
     page.on('dialog', async (dialog) => {
@@ -1333,8 +1339,10 @@ async function submitTopic(jsonPath) {
 
     await login(page);
     const bpmProfile = await readLoggedInBpmProfile(page);
+    markMilestone('login_verified');
     applyLoggedInBpmEditor(topic, bpmProfile);
     const { popup, formFrame } = await openTopicPopup(page);
+    markMilestone('topic_form_opened');
     await fillForm(formFrame, topic);
 
     const mainBefore = path.join(outputDir, 'bpm-main-before-save.png');
@@ -1343,7 +1351,12 @@ async function submitTopic(jsonPath) {
     await clickWorkflowSaveAndWait(popup, formFrame, { timeout: 30000, settleMs: 3000 });
     await popup.screenshot({ path: mainAfter, fullPage: true });
     const savedFormFrame = await waitForMainFormFrame(popup);
-    const cno = await readInputValue(savedFormFrame, '#CNO');
+    cno = await readInputValue(savedFormFrame, '#CNO');
+    const savedBookName = await readInputValue(savedFormFrame, '#BOOKNAME');
+    if (!cno && savedBookName !== topic.bookName) {
+      throw new Error(`BPM draft save did not retain the expected book name: "${topic.bookName}"`);
+    }
+    markMilestone('topic_draft_saved');
 
     await popup.close();
     const reopened = await reopenSavedTopicPopup(page, cno, topic.bookName);
@@ -1354,15 +1367,24 @@ async function submitTopic(jsonPath) {
     const costAfter = path.join(outputDir, 'bpm-after-save.png');
     await reopened.popup.screenshot({ path: costBefore, fullPage: true });
     await clickSaveAndWait(costFrame, { timeout: 30000, settleMs: 2000 });
+    markMilestone('cost_estimate_saved');
     await reopened.popup.screenshot({ path: costAfter, fullPage: true });
     await reopened.popup.close().catch(() => {});
 
-    const verification = await verifyCreatedTitle(page, topic.bookName, cno);
+    verification = await verifyCreatedTitle(page, topic.bookName, cno);
+    if (!verification.ok) {
+      const cnoMessage = cno ? ` with CNO "${cno}"` : '';
+      const cnoOnlyMessage = verification.cnoOnly ? ` Found current CNO title: "${verification.cnoOnly}".` : '';
+      const oldTitleMessage = verification.bookNameOnly ? ` Found another matching book title: "${verification.bookNameOnly}".` : '';
+      throw new Error(`BPM save was not verified: "${topic.bookName}"${cnoMessage} was not found in the worklist after save.${cnoOnlyMessage}${oldTitleMessage}`);
+    }
+    markMilestone('worklist_verified');
     const result = {
-      ok: verification.ok,
+      ok: true,
       title: verification.title,
       cno,
       verification,
+      milestones: [...milestones],
       dialogs,
       expectedBookName: topic.bookName,
       inputPath: absPath,
@@ -1374,12 +1396,20 @@ async function submitTopic(jsonPath) {
       ],
     };
     console.log(JSON.stringify(result, null, 2));
-    if (!verification.ok) {
-      const cnoMessage = cno ? ` with CNO "${cno}"` : '';
-      const cnoOnlyMessage = verification.cnoOnly ? ` Found current CNO title: "${verification.cnoOnly}".` : '';
-      const oldTitleMessage = verification.bookNameOnly ? ` Found another matching book title: "${verification.bookNameOnly}".` : '';
-      throw new Error(`BPM save was not verified: "${topic.bookName}"${cnoMessage} was not found in the worklist after save.${cnoOnlyMessage}${oldTitleMessage}`);
-    }
+    return result;
+  } catch (error) {
+    error.bpmResult = {
+      ok: false,
+      mode: 'submit-topic',
+      title: verification?.title || null,
+      cno: cno || null,
+      verification,
+      milestones: [...milestones],
+      expectedBookName: topic.bookName,
+      inputPath: absPath,
+      error: String(error?.message || error || 'BPM topic submission failed'),
+    };
+    throw error;
   } finally {
     await browser.close();
   }
@@ -1524,6 +1554,7 @@ module.exports = {
 
 if (require.main === module) {
   main().catch((err) => {
+    if (err.bpmResult) console.log(JSON.stringify(err.bpmResult, null, 2));
     console.error(err);
     process.exit(1);
   });

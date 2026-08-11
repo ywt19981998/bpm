@@ -76,6 +76,26 @@ test('CLI exposes isolated topic and author modes', () => {
   assert.match(source, /mode === 'submit-topic'/);
 });
 
+test('topic submission reports verified BPM milestones in order', () => {
+  const body = functionBody('submitTopic');
+  const milestones = [
+    'login_verified',
+    'topic_form_opened',
+    'topic_draft_saved',
+    'cost_estimate_saved',
+    'worklist_verified',
+  ];
+  let previous = -1;
+  for (const milestone of milestones) {
+    const current = body.indexOf(`markMilestone('${milestone}')`);
+    assert.ok(current > previous, `${milestone} must be recorded after the prior verified stage`);
+    previous = current;
+  }
+  assert.match(body, /milestones:\s*\[\.\.\.milestones\]/);
+  assert.match(body, /error\.bpmResult\s*=/);
+  assert.match(source, /err\.bpmResult[\s\S]*JSON\.stringify\(err\.bpmResult/);
+});
+
 test('BPM profile name overrides the website display name before topic filling', async () => {
   const page = fakeBpmProfilePage('叶文涛', '高等信息科技事业部');
   const profile = await readLoggedInBpmProfile(page);

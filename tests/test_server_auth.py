@@ -549,7 +549,7 @@ class ServerJobHttpTests(unittest.TestCase):
 
         def submit(payload):
             captured_payloads.append(json.loads(json.dumps(payload, ensure_ascii=False)))
-            return {"title": "执行时更新"}
+            return {"title": "执行时更新", "milestones": ["worklist_verified"]}
 
         with patch("server.run_bpm_topic_submit", side_effect=submit) as submit_mock:
             worker = threading.Thread(
@@ -565,6 +565,34 @@ class ServerJobHttpTests(unittest.TestCase):
         self.assertEqual(trusted_payload["bpm"]["user"], "new-account")
         self.assertEqual(trusted_payload["bpm"]["password"], "new-secret")
         self.assertNotIn("password", submit_mock.call_args.args[0]["bpm"])
+
+    def test_topic_job_without_worklist_verification_is_failed(self):
+        user = self.current_user()
+        server.APP_STORE.put_integration_credentials(
+            user["id"], "phei_bpm", "stored-account", "stored-secret"
+        )
+        job = server.APP_STORE.create_job(user["id"], "topic", "未完成验证", {})
+
+        with patch(
+            "server.run_bpm_topic_submit",
+            return_value={
+                "title": "未完成验证",
+                "milestones": ["login_verified", "topic_draft_saved"],
+            },
+        ):
+            server.process_bpm_job(
+                job["id"], user["id"], "topic", {"title": "未完成验证"}
+            )
+
+        failed = next(
+            item for item in server.APP_STORE.list_jobs(user["id"]) if item["id"] == job["id"]
+        )
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(
+            failed["result"]["milestones"],
+            ["login_verified", "topic_draft_saved"],
+        )
+        self.assertIn("worklist_verified", failed["error"])
 
     def test_worker_fails_queued_job_when_credentials_are_deleted_before_execution(self):
         user = self.current_user()
@@ -638,7 +666,13 @@ class ServerJobHttpTests(unittest.TestCase):
 
         with patch.object(server.APP_STORE, "update_job", side_effect=flaky_update), patch.object(
             server.APP_STORE, "append_job_log", side_effect=flaky_append
-        ), patch("server.run_bpm_topic_submit", side_effect=[{"title": "第一任务"}, {"title": "第二任务"}]) as submit:
+        ), patch(
+            "server.run_bpm_topic_submit",
+            side_effect=[
+                {"title": "第一任务", "milestones": ["worklist_verified"]},
+                {"title": "第二任务", "milestones": ["worklist_verified"]},
+            ],
+        ) as submit:
             worker = threading.Thread(
                 target=server.bpm_job_worker, args=(work_queue, stop_event), daemon=True
             )
@@ -677,7 +711,7 @@ class ServerJobHttpTests(unittest.TestCase):
 
         def submit(payload):
             completed.set()
-            return {"title": payload["title"]}
+            return {"title": payload["title"], "milestones": ["worklist_verified"]}
 
         with patch("server.run_bpm_topic_submit", side_effect=submit):
             worker = threading.Thread(
