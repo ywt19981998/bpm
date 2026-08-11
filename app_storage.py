@@ -21,6 +21,10 @@ SCRYPT_R = 8
 SCRYPT_P = 1
 SCRYPT_DKLEN = 32
 JOB_STATUSES = {"queued", "running", "succeeded", "failed"}
+PROJECT_REPORT_STATUSES = {"empty", "draft", "confirmed"}
+PROJECT_AUTHOR_STATUSES = {"unknown", "ready", "queued", "running", "succeeded", "failed"}
+PROJECT_BPM_STATUSES = {"not_ready", "ready", "queued", "running", "succeeded", "failed"}
+PROJECT_FILE_KINDS = {"application", "confirmed_report", "exported_report", "bpm_evidence"}
 INTERRUPTED_JOB_ERROR = "服务重启，任务执行状态不确定，请先在 BPM 人工核对后再重试"
 JOB_RESERVED_PAYLOAD_KEYS = {
     "id",
@@ -32,6 +36,7 @@ JOB_RESERVED_PAYLOAD_KEYS = {
     "logs",
     "result",
     "error",
+    "projectId",
 }
 SENSITIVE_JOB_PAYLOAD_KEYS = {
     "password",
@@ -55,6 +60,10 @@ API_KEY_VALUE_RE = re.compile(r"\bsk-[A-Za-z0-9_-]+\b", re.IGNORECASE)
 
 
 class CredentialConfigurationError(ValueError):
+    pass
+
+
+class ProjectVersionConflict(ValueError):
     pass
 
 
@@ -155,6 +164,83 @@ class AppStore:
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (3, int(time.time())),
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS projects (
+                    id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    title TEXT NOT NULL,
+                    author_name TEXT NOT NULL DEFAULT '',
+                    editor_name TEXT NOT NULL DEFAULT '',
+                    report_status TEXT NOT NULL CHECK(report_status IN ('empty', 'draft', 'confirmed')),
+                    author_status TEXT NOT NULL CHECK(author_status IN ('unknown', 'ready', 'queued', 'running', 'succeeded', 'failed')),
+                    bpm_status TEXT NOT NULL CHECK(bpm_status IN ('not_ready', 'ready', 'queued', 'running', 'succeeded', 'failed')),
+                    state_json TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    archived_at INTEGER
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_projects_user_active_updated
+                ON projects(user_id, archived_at, updated_at DESC)
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS project_files (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    kind TEXT NOT NULL CHECK(kind IN ('application', 'confirmed_report', 'exported_report', 'bpm_evidence')),
+                    original_name TEXT NOT NULL,
+                    storage_path TEXT NOT NULL UNIQUE,
+                    sha256 TEXT NOT NULL,
+                    size_bytes INTEGER NOT NULL,
+                    created_at INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_project_files_project_created
+                ON project_files(project_id, created_at DESC)
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS project_revisions (
+                    id TEXT PRIMARY KEY,
+                    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                    version INTEGER NOT NULL,
+                    snapshot_json TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_project_revisions_project_version
+                ON project_revisions(project_id, version DESC)
+                """
+            )
+            job_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+            }
+            if "project_id" not in job_columns:
+                connection.execute(
+                    "ALTER TABLE jobs ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE SET NULL"
+                )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_project_created ON jobs(project_id, created_at DESC)"
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (4, int(time.time())),
             )
 
     @staticmethod
@@ -404,6 +490,382 @@ class AppStore:
                 (user_id, system_type),
             )
 
+    @classmethod
+    def _validate_project_state(cls, state: dict | None) -> dict:
+        if state is None:
+            return {}
+        if not isinstance(state, dict):
+            raise ValueError("project state must be an object")
+        state = cls.sanitize_job_data(state)
+        try:
+            json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as error:
+            raise ValueError("project state must be JSON serializable") from error
+        return state
+
+    @staticmethod
+    def _validate_project_status(value: str, allowed: set[str], field_name: str) -> str:
+        if value not in allowed:
+            raise ValueError(f"invalid {field_name}")
+        return value
+
+    @classmethod
+    def _project_from_row(cls, row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "authorName": row["author_name"],
+            "editorName": row["editor_name"],
+            "reportStatus": row["report_status"],
+            "authorStatus": row["author_status"],
+            "bpmStatus": row["bpm_status"],
+            "state": json.loads(row["state_json"]),
+            "version": row["version"],
+            "createdAt": cls._format_job_timestamp(row["created_at"]),
+            "updatedAt": cls._format_job_timestamp(row["updated_at"]),
+            "archivedAt": cls._format_job_timestamp(row["archived_at"]),
+        }
+
+    @classmethod
+    def _revision_from_row(cls, row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "projectId": row["project_id"],
+            "version": row["version"],
+            "snapshot": json.loads(row["snapshot_json"]),
+            "reason": row["reason"],
+            "createdAt": cls._format_job_timestamp(row["created_at"]),
+        }
+
+    @classmethod
+    def _project_file_from_row(cls, row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "projectId": row["project_id"],
+            "kind": row["kind"],
+            "originalName": row["original_name"],
+            "storagePath": row["storage_path"],
+            "sha256": row["sha256"],
+            "sizeBytes": row["size_bytes"],
+            "createdAt": cls._format_job_timestamp(row["created_at"]),
+        }
+
+    def create_project(
+        self,
+        user_id: int,
+        title: str,
+        state: dict | None = None,
+        *,
+        author_name: str = "",
+        editor_name: str = "",
+        report_status: str = "empty",
+        author_status: str = "unknown",
+        bpm_status: str = "not_ready",
+    ) -> dict:
+        if not isinstance(title, str):
+            raise ValueError("project title must be a string")
+        title = self.sanitize_job_data(title).strip() or "未命名选题"
+        author_name = self.sanitize_job_data(str(author_name)).strip()
+        editor_name = self.sanitize_job_data(str(editor_name)).strip()
+        state = self._validate_project_state(state)
+        self._validate_project_status(report_status, PROJECT_REPORT_STATUSES, "report status")
+        self._validate_project_status(author_status, PROJECT_AUTHOR_STATUSES, "author status")
+        self._validate_project_status(bpm_status, PROJECT_BPM_STATUSES, "BPM status")
+        project_id = str(uuid.uuid4())
+        now = self._job_timestamp()
+        with self.connect() as connection:
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO projects(
+                        id, user_id, title, author_name, editor_name,
+                        report_status, author_status, bpm_status, state_json,
+                        version, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                    """,
+                    (
+                        project_id,
+                        user_id,
+                        title,
+                        author_name,
+                        editor_name,
+                        report_status,
+                        author_status,
+                        bpm_status,
+                        json.dumps(state, ensure_ascii=False, separators=(",", ":")),
+                        now,
+                        now,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                raise ValueError("user does not exist") from error
+            row = connection.execute(
+                "SELECT * FROM projects WHERE id = ? AND user_id = ?",
+                (project_id, user_id),
+            ).fetchone()
+        return self._project_from_row(row)
+
+    def get_project(self, user_id: int, project_id: str) -> dict | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM projects WHERE id = ? AND user_id = ?",
+                (project_id, user_id),
+            ).fetchone()
+        return None if row is None else self._project_from_row(row)
+
+    def list_projects(
+        self,
+        user_id: int,
+        *,
+        include_archived: bool = False,
+        query: str = "",
+        status: str = "",
+    ) -> list[dict]:
+        clauses = ["user_id = ?"]
+        parameters: list = [user_id]
+        if not include_archived:
+            clauses.append("archived_at IS NULL")
+        query = query.strip() if isinstance(query, str) else ""
+        if query:
+            clauses.append("(title LIKE ? OR author_name LIKE ? OR editor_name LIKE ?)")
+            like = f"%{query}%"
+            parameters.extend((like, like, like))
+        status = status.strip() if isinstance(status, str) else ""
+        if status:
+            clauses.append("(report_status = ? OR author_status = ? OR bpm_status = ?)")
+            parameters.extend((status, status, status))
+        sql = (
+            "SELECT * FROM projects WHERE "
+            + " AND ".join(clauses)
+            + " ORDER BY updated_at DESC, rowid DESC"
+        )
+        with self.connect() as connection:
+            rows = connection.execute(sql, parameters).fetchall()
+        return [self._project_from_row(row) for row in rows]
+
+    def update_project(
+        self,
+        user_id: int,
+        project_id: str,
+        expected_version: int,
+        patch: dict,
+        *,
+        revision_reason: str | None = None,
+    ) -> dict | None:
+        if not isinstance(expected_version, int) or expected_version <= 0:
+            raise ValueError("project version must be a positive integer")
+        if not isinstance(patch, dict):
+            raise ValueError("project patch must be an object")
+        allowed = {
+            "title",
+            "author_name",
+            "editor_name",
+            "report_status",
+            "author_status",
+            "bpm_status",
+            "state",
+        }
+        unknown = set(patch) - allowed
+        if unknown:
+            raise ValueError("project patch contains unsupported fields")
+        values = dict(patch)
+        if "title" in values:
+            if not isinstance(values["title"], str):
+                raise ValueError("project title must be a string")
+            values["title"] = self.sanitize_job_data(values["title"]).strip() or "未命名选题"
+        for key in ("author_name", "editor_name"):
+            if key in values:
+                values[key] = self.sanitize_job_data(str(values[key])).strip()
+        if "report_status" in values:
+            self._validate_project_status(
+                values["report_status"], PROJECT_REPORT_STATUSES, "report status"
+            )
+        if "author_status" in values:
+            self._validate_project_status(
+                values["author_status"], PROJECT_AUTHOR_STATUSES, "author status"
+            )
+        if "bpm_status" in values:
+            self._validate_project_status(
+                values["bpm_status"], PROJECT_BPM_STATUSES, "BPM status"
+            )
+        if "state" in values:
+            values["state_json"] = json.dumps(
+                self._validate_project_state(values.pop("state")),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM projects WHERE id = ? AND user_id = ?",
+                (project_id, user_id),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["version"] != expected_version:
+                raise ProjectVersionConflict("project was updated by another request")
+            assignments = [f"{key} = ?" for key in values]
+            parameters = list(values.values())
+            now = self._job_timestamp()
+            assignments.extend(("version = version + 1", "updated_at = ?"))
+            parameters.extend((now, project_id, user_id, expected_version))
+            connection.execute(
+                f"UPDATE projects SET {', '.join(assignments)} "
+                "WHERE id = ? AND user_id = ? AND version = ?",
+                parameters,
+            )
+            updated_row = connection.execute(
+                "SELECT * FROM projects WHERE id = ? AND user_id = ?",
+                (project_id, user_id),
+            ).fetchone()
+            if revision_reason is not None:
+                reason = self.sanitize_job_data(str(revision_reason)).strip()
+                if not reason:
+                    raise ValueError("revision reason is required")
+                snapshot = self._project_from_row(updated_row)
+                connection.execute(
+                    """
+                    INSERT INTO project_revisions(
+                        id, project_id, version, snapshot_json, reason, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        str(uuid.uuid4()),
+                        project_id,
+                        updated_row["version"],
+                        json.dumps(snapshot, ensure_ascii=False, separators=(",", ":")),
+                        reason,
+                        now,
+                    ),
+                )
+        return self._project_from_row(updated_row)
+
+    def archive_project(
+        self, user_id: int, project_id: str, expected_version: int
+    ) -> dict | None:
+        if not isinstance(expected_version, int) or expected_version <= 0:
+            raise ValueError("project version must be a positive integer")
+        now = self._job_timestamp()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT version FROM projects WHERE id = ? AND user_id = ?",
+                (project_id, user_id),
+            ).fetchone()
+            if row is None:
+                return None
+            if row["version"] != expected_version:
+                raise ProjectVersionConflict("project was updated by another request")
+            connection.execute(
+                """
+                UPDATE projects
+                SET archived_at = ?, updated_at = ?, version = version + 1
+                WHERE id = ? AND user_id = ? AND version = ?
+                """,
+                (now, now, project_id, user_id, expected_version),
+            )
+            updated_row = connection.execute(
+                "SELECT * FROM projects WHERE id = ? AND user_id = ?",
+                (project_id, user_id),
+            ).fetchone()
+        return self._project_from_row(updated_row)
+
+    def list_project_revisions(self, user_id: int, project_id: str) -> list[dict]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT pr.*
+                FROM project_revisions AS pr
+                JOIN projects AS p ON p.id = pr.project_id
+                WHERE pr.project_id = ? AND p.user_id = ?
+                ORDER BY pr.version DESC, pr.created_at DESC
+                """,
+                (project_id, user_id),
+            ).fetchall()
+        return [self._revision_from_row(row) for row in rows]
+
+    def add_project_file(
+        self,
+        user_id: int,
+        project_id: str,
+        file_id: str,
+        kind: str,
+        original_name: str,
+        storage_path: str,
+        sha256: str,
+        size_bytes: int,
+    ) -> dict:
+        if kind not in PROJECT_FILE_KINDS:
+            raise ValueError("invalid project file kind")
+        if not isinstance(file_id, str) or not file_id.strip():
+            raise ValueError("project file id is required")
+        if not isinstance(original_name, str) or not original_name.strip():
+            raise ValueError("original file name is required")
+        if not isinstance(storage_path, str) or not storage_path.strip():
+            raise ValueError("project storage path is required")
+        if not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256):
+            raise ValueError("invalid project file sha256")
+        if not isinstance(size_bytes, int) or size_bytes < 0:
+            raise ValueError("invalid project file size")
+        now = self._job_timestamp()
+        with self.connect() as connection:
+            project = connection.execute(
+                "SELECT 1 FROM projects WHERE id = ? AND user_id = ?",
+                (project_id, user_id),
+            ).fetchone()
+            if project is None:
+                raise ValueError("project does not exist for user")
+            connection.execute(
+                """
+                INSERT INTO project_files(
+                    id, project_id, kind, original_name, storage_path,
+                    sha256, size_bytes, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    file_id.strip(),
+                    project_id,
+                    kind,
+                    self.sanitize_job_data(original_name).strip(),
+                    storage_path.strip(),
+                    sha256,
+                    size_bytes,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM project_files WHERE id = ?", (file_id.strip(),)
+            ).fetchone()
+        return self._project_file_from_row(row)
+
+    def get_project_file(
+        self, user_id: int, project_id: str, file_id: str
+    ) -> dict | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT pf.*
+                FROM project_files AS pf
+                JOIN projects AS p ON p.id = pf.project_id
+                WHERE pf.id = ? AND pf.project_id = ? AND p.user_id = ?
+                """,
+                (file_id, project_id, user_id),
+            ).fetchone()
+        return None if row is None else self._project_file_from_row(row)
+
+    def list_project_files(self, user_id: int, project_id: str) -> list[dict]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT pf.*
+                FROM project_files AS pf
+                JOIN projects AS p ON p.id = pf.project_id
+                WHERE pf.project_id = ? AND p.user_id = ?
+                ORDER BY pf.created_at DESC, pf.rowid DESC
+                """,
+                (project_id, user_id),
+            ).fetchall()
+        return [self._project_file_from_row(row) for row in rows]
+
     @staticmethod
     def _job_timestamp() -> int:
         return time.time_ns() // 1_000_000
@@ -479,6 +941,7 @@ class AppStore:
             "type": row["job_type"],
             "title": row["title"],
             "status": row["status"],
+            "projectId": row["project_id"] if "project_id" in row.keys() else None,
             "createdAt": cls._format_job_timestamp(row["created_at"]),
             "updatedAt": cls._format_job_timestamp(row["updated_at"]),
             "logs": json.loads(row["logs_json"]),
@@ -488,7 +951,14 @@ class AppStore:
         job.update(payload)
         return job
 
-    def create_job(self, user_id: int, job_type: str, title: str, public_payload: dict) -> dict:
+    def create_job(
+        self,
+        user_id: int,
+        job_type: str,
+        title: str,
+        public_payload: dict,
+        project_id: str | None = None,
+    ) -> dict:
         if not isinstance(job_type, str) or not job_type.strip():
             raise ValueError("job_type is required")
         if not isinstance(title, str) or not title.strip():
@@ -498,13 +968,20 @@ class AppStore:
         now = self._job_timestamp()
         job_id = uuid.uuid4().hex[:12]
         with self.connect() as connection:
+            if project_id is not None:
+                project = connection.execute(
+                    "SELECT 1 FROM projects WHERE id = ? AND user_id = ?",
+                    (project_id, user_id),
+                ).fetchone()
+                if project is None:
+                    raise ValueError("project does not exist for user")
             try:
                 connection.execute(
                     """
                     INSERT INTO jobs(
                         id, user_id, job_type, title, status, public_payload_json,
-                        logs_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, 'queued', ?, '[]', ?, ?)
+                        logs_json, created_at, updated_at, project_id
+                    ) VALUES (?, ?, ?, ?, 'queued', ?, '[]', ?, ?, ?)
                     """,
                     (
                         job_id,
@@ -514,6 +991,7 @@ class AppStore:
                         json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                         now,
                         now,
+                        project_id,
                     ),
                 )
             except sqlite3.IntegrityError as error:

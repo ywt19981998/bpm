@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app_storage import AppStore, CredentialConfigurationError
+from app_storage import AppStore, CredentialConfigurationError, ProjectVersionConflict
 
 
 class AppStoreAuthTests(unittest.TestCase):
@@ -324,6 +324,184 @@ class AppStoreJobTests(unittest.TestCase):
     def test_create_job_reads_the_new_record_with_its_owner(self):
         source = inspect.getsource(AppStore.create_job)
         self.assertIn("WHERE id = ? AND user_id = ?", source)
+
+
+class AppStoreProjectTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "app.db"
+        self.store = AppStore(self.db_path)
+        self.user_id = self.store.register_user(
+            "editor01", "S3cure-pass", "张编辑"
+        )["id"]
+        self.other_user_id = self.store.register_user(
+            "editor02", "S3cure-pass", "李编辑"
+        )["id"]
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    def test_project_round_trip_is_versioned_and_owner_scoped(self):
+        project = self.store.create_project(
+            self.user_id,
+            "测试选题",
+            {"sections": [{"key": "content", "text": "草稿", "confirmed": False}]},
+            author_name="王老师",
+            editor_name="张编辑",
+        )
+
+        self.assertEqual(project["version"], 1)
+        self.assertEqual(project["title"], "测试选题")
+        self.assertEqual(project["authorName"], "王老师")
+        self.assertEqual(project["reportStatus"], "empty")
+        self.assertIsNone(self.store.get_project(self.other_user_id, project["id"]))
+
+        updated = self.store.update_project(
+            self.user_id,
+            project["id"],
+            1,
+            {
+                "title": "修订选题",
+                "report_status": "draft",
+                "state": {"sections": [{"key": "content", "text": "修订稿"}]},
+            },
+        )
+
+        self.assertEqual(updated["version"], 2)
+        self.assertEqual(updated["title"], "修订选题")
+        self.assertEqual(updated["state"]["sections"][0]["text"], "修订稿")
+        with self.assertRaises(ProjectVersionConflict):
+            self.store.update_project(
+                self.user_id, project["id"], 1, {"title": "过期内容"}
+            )
+        self.assertIsNone(
+            self.store.update_project(
+                self.other_user_id,
+                project["id"],
+                2,
+                {"title": "越权修改"},
+            )
+        )
+
+    def test_project_list_filters_searches_and_archives(self):
+        first = self.store.create_project(
+            self.user_id,
+            "人工智能通识",
+            report_status="draft",
+            bpm_status="not_ready",
+        )
+        second = self.store.create_project(
+            self.user_id,
+            "数据库原理",
+            report_status="confirmed",
+            bpm_status="ready",
+        )
+        self.store.create_project(
+            self.other_user_id,
+            "其他用户项目",
+            report_status="confirmed",
+        )
+
+        self.assertEqual(
+            [item["id"] for item in self.store.list_projects(self.user_id)],
+            [second["id"], first["id"]],
+        )
+        self.assertEqual(
+            [item["id"] for item in self.store.list_projects(self.user_id, query="数据库")],
+            [second["id"]],
+        )
+        self.assertEqual(
+            [
+                item["id"]
+                for item in self.store.list_projects(
+                    self.user_id, status="confirmed"
+                )
+            ],
+            [second["id"]],
+        )
+
+        archived = self.store.archive_project(
+            self.user_id, second["id"], second["version"]
+        )
+        self.assertIsNotNone(archived["archivedAt"])
+        self.assertEqual(
+            [item["id"] for item in self.store.list_projects(self.user_id)],
+            [first["id"]],
+        )
+        self.assertEqual(
+            {item["id"] for item in self.store.list_projects(self.user_id, include_archived=True)},
+            {first["id"], second["id"]},
+        )
+
+    def test_project_revision_is_written_only_for_explicit_checkpoint(self):
+        project = self.store.create_project(self.user_id, "版本测试", {"value": 1})
+        self.store.update_project(
+            self.user_id,
+            project["id"],
+            project["version"],
+            {"state": {"value": 2}},
+        )
+        self.assertEqual(self.store.list_project_revisions(self.user_id, project["id"]), [])
+
+        current = self.store.get_project(self.user_id, project["id"])
+        self.store.update_project(
+            self.user_id,
+            project["id"],
+            current["version"],
+            {"state": {"value": 3}},
+            revision_reason="report_confirmed",
+        )
+        revisions = self.store.list_project_revisions(self.user_id, project["id"])
+        self.assertEqual(len(revisions), 1)
+        self.assertEqual(revisions[0]["reason"], "report_confirmed")
+        self.assertEqual(revisions[0]["snapshot"]["state"], {"value": 3})
+
+    def test_project_file_metadata_and_jobs_are_linked_to_owner(self):
+        project = self.store.create_project(self.user_id, "文件测试")
+        file_record = self.store.add_project_file(
+            self.user_id,
+            project["id"],
+            "file-id",
+            "application",
+            "申报表.docx",
+            "1/project/file-id.docx",
+            "a" * 64,
+            1024,
+        )
+
+        self.assertEqual(file_record["kind"], "application")
+        self.assertEqual(
+            self.store.get_project_file(
+                self.user_id, project["id"], file_record["id"]
+            )["originalName"],
+            "申报表.docx",
+        )
+        self.assertIsNone(
+            self.store.get_project_file(
+                self.other_user_id, project["id"], file_record["id"]
+            )
+        )
+        self.assertEqual(
+            self.store.list_project_files(self.user_id, project["id"])[0]["sha256"],
+            "a" * 64,
+        )
+
+        job = self.store.create_job(
+            self.user_id,
+            "topic",
+            "文件测试",
+            {"createdBy": "张编辑"},
+            project_id=project["id"],
+        )
+        self.assertEqual(job["projectId"], project["id"])
+        with self.assertRaises(ValueError):
+            self.store.create_job(
+                self.other_user_id,
+                "topic",
+                "越权项目",
+                {},
+                project_id=project["id"],
+            )
 
 
 if __name__ == "__main__":
