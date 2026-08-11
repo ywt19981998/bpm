@@ -23,13 +23,15 @@ from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 from http.cookies import CookieError, SimpleCookie
 
 from docx import Document
 from dotenv import load_dotenv
 
-from app_storage import AppStore
+from app_storage import AppStore, ProjectVersionConflict
+from project_domain import build_bpm_preflight, normalize_project_state, summarize_project_state
+from project_files import InvalidProjectFile, ProjectFileStore
 
 
 ROOT = Path(__file__).resolve().parent
@@ -46,6 +48,9 @@ APP_STORE = AppStore(
     Path(os.environ.get("PHEI_DB_PATH", ROOT / "data" / "app.db")),
     os.environ.get("APP_CREDENTIAL_KEY", ""),
 )
+PROJECT_FILE_STORE = ProjectFileStore(
+    Path(os.environ.get("PHEI_PROJECTS_PATH", ROOT / "data" / "projects"))
+)
 APP_STORE.mark_interrupted_jobs_failed()
 SESSION_COOKIE_NAME = "phei_session"
 STATIC_ASSETS = {
@@ -58,6 +63,11 @@ STATIC_ASSETS = {
     ),
     "/assets/report-preview.png": ("assets/report-preview.png", "image/png"),
 }
+
+PROJECT_API_RE = re.compile(
+    r"^/api/projects/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
+    r"(?:/(preflight|archive|files)(?:/([A-Za-z0-9_-]{1,128}))?)?$"
+)
 
 
 class MultipartForm:
@@ -1746,8 +1756,235 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError as error:
             self.send_json(400, {"error": str(error), "code": "INTEGRATION_CONFIGURATION_ERROR"})
 
+    @staticmethod
+    def project_api_match(path: str):
+        return PROJECT_API_RE.fullmatch(path)
+
+    @staticmethod
+    def public_project_file(file_record: dict) -> dict:
+        return {
+            "id": file_record["id"],
+            "projectId": file_record["projectId"],
+            "kind": file_record["kind"],
+            "originalName": file_record["originalName"],
+            "storagePath": file_record["storagePath"],
+            "sha256": file_record["sha256"],
+            "sizeBytes": file_record["sizeBytes"],
+            "createdAt": file_record["createdAt"],
+        }
+
+    def project_payload(self, user: dict, project: dict, *, include_preflight: bool = False):
+        payload = {
+            "project": project,
+            "files": [
+                self.public_project_file(item)
+                for item in APP_STORE.list_project_files(user["id"], project["id"])
+            ],
+        }
+        if include_preflight:
+            try:
+                configured = APP_STORE.has_integration_credentials(user["id"], "phei_bpm")
+            except ValueError:
+                configured = False
+            payload["preflight"] = build_bpm_preflight(
+                project["state"], bpm_configured=configured
+            )
+        return payload
+
+    def handle_project_list(self, user: dict, parsed_url):
+        query = parse_qs(parsed_url.query, keep_blank_values=False)
+        include_archived = query.get("includeArchived", [""])[0].lower() == "true"
+        projects = APP_STORE.list_projects(
+            user["id"],
+            include_archived=include_archived,
+            query=query.get("q", [""])[0],
+            status=query.get("status", [""])[0],
+        )
+        self.send_json(200, {"projects": projects})
+
+    def handle_project_create(self, user: dict):
+        try:
+            payload = self.read_json()
+            title = payload.get("title", "")
+            if not isinstance(title, str):
+                raise ValueError("选题名称必须是文本。")
+            state = normalize_project_state(payload.get("state"))
+            if title.strip():
+                state["bpmTopic"]["bookName"] = title.strip()
+                state["fieldSources"].setdefault("bpmTopic.bookName", "user")
+            summary = summarize_project_state(state, user["display_name"])
+            project = APP_STORE.create_project(
+                user["id"],
+                summary["title"],
+                summary["state"],
+                author_name=summary["authorName"],
+                editor_name=summary["editorName"],
+                report_status=summary["reportStatus"],
+                author_status=summary["authorStatus"],
+                bpm_status=summary["bpmStatus"],
+            )
+            self.send_json(201, self.project_payload(user, project))
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(400, {"error": str(error), "code": "PROJECT_INVALID_INPUT"})
+
+    def handle_project_get(self, user: dict, project_id: str):
+        project = APP_STORE.get_project(user["id"], project_id)
+        if project is None:
+            self.send_json(404, {"error": "未找到选题项目。", "code": "PROJECT_NOT_FOUND"})
+            return
+        self.send_json(200, self.project_payload(user, project))
+
+    def handle_project_update(self, user: dict, project_id: str):
+        project = APP_STORE.get_project(user["id"], project_id)
+        if project is None:
+            self.send_json(404, {"error": "未找到选题项目。", "code": "PROJECT_NOT_FOUND"})
+            return
+        try:
+            payload = self.read_json()
+            version = payload.get("version")
+            if not isinstance(version, int):
+                raise ValueError("项目版本无效。")
+            state = normalize_project_state(payload.get("state", project["state"]))
+            if "title" in payload:
+                if not isinstance(payload["title"], str):
+                    raise ValueError("选题名称必须是文本。")
+                state["bpmTopic"]["bookName"] = payload["title"].strip()
+                state["fieldSources"]["bpmTopic.bookName"] = "user"
+            summary = summarize_project_state(state, user["display_name"])
+            author_status = summary["authorStatus"]
+            if project["authorStatus"] in {"queued", "running", "succeeded", "failed"}:
+                author_status = project["authorStatus"]
+            bpm_status = summary["bpmStatus"]
+            if project["bpmStatus"] in {"queued", "running", "succeeded", "failed"}:
+                bpm_status = project["bpmStatus"]
+            updated = APP_STORE.update_project(
+                user["id"],
+                project_id,
+                version,
+                {
+                    "title": summary["title"],
+                    "author_name": summary["authorName"],
+                    "editor_name": summary["editorName"],
+                    "report_status": summary["reportStatus"],
+                    "author_status": author_status,
+                    "bpm_status": bpm_status,
+                    "state": summary["state"],
+                },
+                revision_reason=payload.get("revisionReason"),
+            )
+            self.send_json(200, self.project_payload(user, updated))
+        except ProjectVersionConflict as error:
+            self.send_json(
+                409,
+                {"error": str(error), "code": "PROJECT_VERSION_CONFLICT"},
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(400, {"error": str(error), "code": "PROJECT_INVALID_INPUT"})
+
+    def handle_project_archive(self, user: dict, project_id: str):
+        project = APP_STORE.get_project(user["id"], project_id)
+        if project is None:
+            self.send_json(404, {"error": "未找到选题项目。", "code": "PROJECT_NOT_FOUND"})
+            return
+        try:
+            payload = self.read_json()
+            archived = APP_STORE.archive_project(
+                user["id"], project_id, payload.get("version")
+            )
+            self.send_json(200, self.project_payload(user, archived))
+        except ProjectVersionConflict as error:
+            self.send_json(
+                409,
+                {"error": str(error), "code": "PROJECT_VERSION_CONFLICT"},
+            )
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(400, {"error": str(error), "code": "PROJECT_INVALID_INPUT"})
+
+    def handle_project_preflight(self, user: dict, project_id: str):
+        project = APP_STORE.get_project(user["id"], project_id)
+        if project is None:
+            self.send_json(404, {"error": "未找到选题项目。", "code": "PROJECT_NOT_FOUND"})
+            return
+        self.send_json(200, self.project_payload(user, project, include_preflight=True))
+
+    def handle_project_file_upload(self, user: dict, project_id: str):
+        project = APP_STORE.get_project(user["id"], project_id)
+        if project is None:
+            self.send_json(404, {"error": "未找到选题项目。", "code": "PROJECT_NOT_FOUND"})
+            return
+        stored = None
+        try:
+            form = read_multipart_form(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={
+                    "REQUEST_METHOD": "POST",
+                    "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+                    "CONTENT_LENGTH": self.headers.get("Content-Length", "0"),
+                },
+            )
+            kind = form.getfirst("kind", "application")
+            if isinstance(kind, bytes):
+                kind = kind.decode("utf-8")
+            file_item = form["file"] if "file" in form else None
+            if file_item is None or not getattr(file_item, "file", None):
+                raise InvalidProjectFile("请上传 DOCX 文件。")
+            filename = getattr(file_item, "filename", "document.docx")
+            if Path(filename).suffix.lower() != ".docx":
+                raise InvalidProjectFile("仅支持 .docx 文件。")
+            content = file_item.file.read()
+            file_id = uuid.uuid4().hex
+            stored = PROJECT_FILE_STORE.save_docx(
+                user["id"], project_id, file_id, content
+            )
+            record = APP_STORE.add_project_file(
+                user["id"],
+                project_id,
+                file_id,
+                kind,
+                filename,
+                stored.relative_path,
+                stored.sha256,
+                stored.size_bytes,
+            )
+            self.send_json(201, {"file": self.public_project_file(record)})
+        except InvalidProjectFile as error:
+            if stored is not None:
+                PROJECT_FILE_STORE.remove(stored.relative_path)
+            self.send_json(400, {"error": str(error), "code": "PROJECT_FILE_INVALID"})
+        except ValueError as error:
+            if stored is not None:
+                PROJECT_FILE_STORE.remove(stored.relative_path)
+            self.send_json(400, {"error": str(error), "code": "PROJECT_FILE_INVALID"})
+
+    def handle_project_file_download(
+        self, user: dict, project_id: str, file_id: str
+    ):
+        record = APP_STORE.get_project_file(user["id"], project_id, file_id)
+        if record is None:
+            self.send_json(404, {"error": "未找到项目文件。", "code": "PROJECT_FILE_NOT_FOUND"})
+            return
+        try:
+            data = PROJECT_FILE_STORE.resolve(record["storagePath"]).read_bytes()
+        except (InvalidProjectFile, OSError):
+            self.send_json(404, {"error": "项目文件已丢失。", "code": "PROJECT_FILE_MISSING"})
+            return
+        self.send_response(200)
+        self.send_header(
+            "Content-Type",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header(
+            "Content-Disposition",
+            f"attachment; filename*=UTF-8''{quote(record['originalName'])}",
+        )
+        self.end_headers()
+        self.wfile.write(data)
+
     def do_GET(self):
-        path = unquote(self.path.split("?", 1)[0])
+        parsed_url = urlparse(self.path)
+        path = unquote(parsed_url.path)
         if path == "/api/health":
             self.send_json(200, {"ok": True, "time": now_iso()})
             return
@@ -1767,6 +2004,21 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/bpm-jobs":
             self.send_json(200, {"jobs": APP_STORE.list_jobs(user["id"])})
             return
+        if path == "/api/projects":
+            self.handle_project_list(user, parsed_url)
+            return
+        project_match = self.project_api_match(path)
+        if project_match:
+            project_id, action, file_id = project_match.groups()
+            if action is None:
+                self.handle_project_get(user, project_id)
+                return
+            if action == "preflight" and file_id is None:
+                self.handle_project_preflight(user, project_id)
+                return
+            if action == "files" and file_id:
+                self.handle_project_file_download(user, project_id, file_id)
+                return
         self.serve_static(path)
 
     def do_HEAD(self):
@@ -1774,17 +2026,21 @@ class Handler(BaseHTTPRequestHandler):
         self.serve_static(path, include_body=False)
 
     def do_PUT(self):
-        path = unquote(self.path.split("?", 1)[0])
+        path = unquote(urlparse(self.path).path)
         user = self.require_user() if path.startswith("/api/") else None
         if path.startswith("/api/") and not user:
             return
         if path == "/api/integrations/phei-bpm":
             self.handle_bpm_integration_put(user)
             return
+        project_match = self.project_api_match(path)
+        if project_match and project_match.group(2) is None:
+            self.handle_project_update(user, project_match.group(1))
+            return
         self.send_error(404)
 
     def do_DELETE(self):
-        path = unquote(self.path.split("?", 1)[0])
+        path = unquote(urlparse(self.path).path)
         user = self.require_user() if path.startswith("/api/") else None
         if path.startswith("/api/") and not user:
             return
@@ -1794,7 +2050,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
-        path = unquote(self.path.split("?", 1)[0])
+        path = unquote(urlparse(self.path).path)
         if path == "/api/auth/register":
             self.handle_auth_register()
             return
@@ -1808,6 +2064,18 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/api/"):
             user = self.require_user()
             if not user:
+                return
+        if path == "/api/projects":
+            self.handle_project_create(user)
+            return
+        project_match = self.project_api_match(path)
+        if project_match:
+            project_id, action, file_id = project_match.groups()
+            if action == "archive" and file_id is None:
+                self.handle_project_archive(user, project_id)
+                return
+            if action == "files" and file_id is None:
+                self.handle_project_file_upload(user, project_id)
                 return
         if path == "/api/generate-report":
             self.handle_generate_report()
