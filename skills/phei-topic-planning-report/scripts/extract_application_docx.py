@@ -22,6 +22,35 @@ SENSITIVE_KEYWORDS = {
     "邮政编码",
 }
 
+FIELD_KEY_ALIASES = {
+    "姓名": "姓名",
+    "作者姓名": "作者姓名",
+    "第一作者姓名": "第一作者姓名",
+    "主要作（译）者姓名": "主要作（译）者姓名",
+    "主要作译者姓名": "主要作（译）者姓名",
+    "选题名": "选题名称",
+    "选题名称": "选题名称",
+    "教材名称": "教材名称",
+    "书名": "书名",
+    "联系电话": "联系电话",
+    "联系电话1": "联系电话1",
+    "联系电话2": "联系电话2",
+    "电话": "电话",
+    "手机": "手机",
+    "身份证": "身份证号",
+    "身份证号": "身份证号",
+    "证件号": "证件号",
+    "电子邮箱": "电子邮箱",
+    "邮箱": "邮箱",
+    "email": "email",
+    "邮政编码": "邮政编码",
+    "邮编": "邮编",
+    "通信地址": "通信地址",
+    "通讯地址": "通讯地址",
+}
+
+KNOWN_FIELD_KEYS = set(FIELD_KEY_ALIASES.values())
+
 
 def load_document(path: Path):
     try:
@@ -50,7 +79,7 @@ def collapse_repeated(values: Iterable[str]) -> list[str]:
 
 
 def is_sensitive_key(key: str) -> bool:
-    key_l = key.lower()
+    key_l = re.sub(r"\s+", "", key).lower()
     return any(word.lower() in key_l for word in SENSITIVE_KEYWORDS)
 
 
@@ -59,7 +88,8 @@ def canonical_key(key: str) -> str:
     key = re.sub(r"（[^）]*）", "", key)
     key = re.sub(r"\([^)]*\)", "", key)
     key = normalize(key)
-    return key
+    compact = re.sub(r"\s+", "", key)
+    return FIELD_KEY_ALIASES.get(compact.lower(), key)
 
 
 def mask_value(value: str) -> str:
@@ -84,12 +114,53 @@ def extract_table_rows(doc) -> list[dict]:
     return rows
 
 
+def mask_table_rows(table_rows: list[dict]) -> list[dict]:
+    masked_rows: list[dict] = []
+    for row in table_rows:
+        cells = list(row.get("cells") or [])
+        for index, cell in enumerate(cells):
+            if not is_sensitive_key(canonical_key(cell)):
+                continue
+            if index + 1 < len(cells):
+                cells[index + 1] = mask_value(cells[index + 1])
+            if re.search(r"[:：]", cell):
+                label = re.split(r"[:：]", cell, maxsplit=1)[0]
+                cells[index] = f"{label}：[已隐藏]"
+        masked_rows.append({**row, "cells": cells})
+    return masked_rows
+
+
+def add_field(fields: dict[str, str], key: str, value: str, include_sensitive: bool) -> None:
+    key = normalize(key)
+    value = normalize(value)
+    if not key or not value or key == value:
+        return
+    if is_sensitive_key(canonical_key(key)) and not include_sensitive:
+        value = mask_value(value)
+    if key in fields and fields[key] != value:
+        fields[key] = fields[key] + "\n" + value
+    else:
+        fields[key] = value
+
+
 def extract_field_pairs(table_rows: list[dict], include_sensitive: bool) -> dict[str, str]:
     fields: dict[str, str] = {}
     for row in table_rows:
         cells = row["cells"]
         if len(cells) < 2:
             continue
+
+        # A merged section heading may occupy the first cell, leaving a real
+        # label/value pair at offsets 1 and 2. Scan recognized labels before
+        # retaining the historical fixed-pair behavior below.
+        for index, key in enumerate(cells[:-1]):
+            value = cells[index + 1]
+            simple_key = canonical_key(key)
+            if simple_key not in KNOWN_FIELD_KEYS:
+                continue
+            if canonical_key(value) in KNOWN_FIELD_KEYS:
+                continue
+            add_field(fields, key, value, include_sensitive)
 
         if len(cells) == 2:
             pairs = [(cells[0], cells[1])]
@@ -103,16 +174,9 @@ def extract_field_pairs(table_rows: list[dict], include_sensitive: bool) -> dict
                 i += 2
 
         for key, value in pairs:
-            key = normalize(key)
-            value = normalize(value)
-            if not key or not value or key == value:
+            if canonical_key(value) in KNOWN_FIELD_KEYS:
                 continue
-            if is_sensitive_key(key) and not include_sensitive:
-                value = mask_value(value)
-            if key in fields and fields[key] != value:
-                fields[key] = fields[key] + "\n" + value
-            else:
-                fields[key] = value
+            add_field(fields, key, value, include_sensitive)
     return fields
 
 
@@ -168,8 +232,9 @@ def build_canonical_fields(fields: dict[str, str]) -> dict[str, str]:
 def build_payload(path: Path, include_sensitive: bool) -> dict:
     doc = load_document(path)
     paragraphs = extract_paragraphs(doc)
-    table_rows = extract_table_rows(doc)
-    fields = extract_field_pairs(table_rows, include_sensitive=include_sensitive)
+    raw_table_rows = extract_table_rows(doc)
+    safe_table_rows = mask_table_rows(raw_table_rows)
+    fields = extract_field_pairs(raw_table_rows, include_sensitive=include_sensitive)
 
     appendix = {
         "outline_from_paragraphs": extract_heading_section(paragraphs, ["大纲及目录", "大 纲 及 目 录"]),
@@ -184,7 +249,8 @@ def build_payload(path: Path, include_sensitive: bool) -> dict:
         "canonical_fields": build_canonical_fields(fields),
         "appendix_sections": appendix,
         "paragraphs": paragraphs,
-        "table_rows": table_rows,
+        "table_rows": raw_table_rows if include_sensitive else safe_table_rows,
+        "safe_table_rows": safe_table_rows,
         "notes": [
             "Sensitive fields are masked by default. Re-run with --include-sensitive only if the user explicitly needs raw private data.",
             "Use application_fields as the primary source; use appendix_sections and paragraphs to recover attached outline/reader details.",

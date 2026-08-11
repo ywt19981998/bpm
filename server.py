@@ -469,6 +469,7 @@ def compact_facts(facts: dict) -> dict:
     fields = facts.get("canonical_fields") or facts.get("application_fields") or {}
     keep_keys = [
         "教材名称",
+        "选题名",
         "选题名称",
         "作者姓名",
         "姓名",
@@ -855,8 +856,8 @@ def build_bpm_topic(facts: dict, result: dict) -> dict:
     author = section_value(result, "author")
     marketing = section_value(result, "marketing")
     title = first_non_empty(
+        field_value(facts, "教材名称", "选题名称", "选题名", "书名"),
         result.get("title", ""),
-        field_value(facts, "教材名称", "选题名称", "书名"),
         "选题策划报告",
     )
     brief = first_non_empty(field_value(facts, "内容简介"), content)
@@ -1503,6 +1504,151 @@ def call_fast_model(prompt: str) -> dict:
     return call_model(prompt, DEFAULT_MODEL_URL, DEFAULT_API_KEY, FAST_MODEL)
 
 
+CORE_FIELD_ALIASES = {
+    "选题名称": ("教材名称", "选题名称", "选题名", "书名"),
+    "姓名": ("作者姓名", "姓名", "主要作（译）者姓名", "第一作者姓名", "主编"),
+}
+
+RECOVERY_MODEL_KEYS = {
+    "选题名称": "bookName",
+    "姓名": "authorName",
+}
+
+SENSITIVE_SOURCE_LABELS = (
+    "身份证",
+    "证件号",
+    "联系电话",
+    "电话",
+    "手机",
+    "电子邮箱",
+    "邮箱",
+    "email",
+    "邮政编码",
+    "邮编",
+    "通信地址",
+    "通讯地址",
+)
+
+
+def missing_core_fields(facts: dict) -> list[str]:
+    missing = []
+    if not field_value(facts, *CORE_FIELD_ALIASES["选题名称"]):
+        missing.append("选题名称")
+    if not extract_author_name_from_facts(facts):
+        missing.append("姓名")
+    return missing
+
+
+def is_sensitive_source_label(value: str) -> bool:
+    compact = re.sub(r"\s+", "", str(value or "")).lower()
+    return any(label.lower() in compact for label in SENSITIVE_SOURCE_LABELS)
+
+
+def scrub_private_source_value(value: str) -> str:
+    text = str(value or "")
+    text = re.sub(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "[已隐藏]", text)
+    text = re.sub(r"(?<!\d)1[3-9]\d{9}(?!\d)", "[已隐藏]", text)
+    text = re.sub(r"(?<!\d)\d{17}[\dXx](?!\d)", "[已隐藏]", text)
+    return text
+
+
+def safe_recovery_rows(facts: dict) -> list[list[str]]:
+    source_rows = facts.get("safe_table_rows")
+    if not isinstance(source_rows, list):
+        source_rows = facts.get("table_rows") or []
+    result = []
+    for row in source_rows:
+        if not isinstance(row, dict):
+            continue
+        cells = [scrub_private_source_value(cell) for cell in (row.get("cells") or [])]
+        for index, cell in enumerate(cells[:-1]):
+            if is_sensitive_source_label(cell):
+                cells[index + 1] = "[已隐藏]"
+        if cells:
+            result.append(cells)
+    return result
+
+
+def normalized_source_text(value: str) -> str:
+    return re.sub(r"\s+", "", strip_indent(str(value or "")))
+
+
+def source_contains_candidate(facts: dict, value: str) -> bool:
+    candidate = normalized_source_text(value)
+    if not candidate or candidate == "[已隐藏]":
+        return False
+    source = normalized_source_text(
+        "\n".join(cell for row in safe_recovery_rows(facts) for cell in row)
+    )
+    return candidate in source
+
+
+def build_structured_field_recovery_prompt(facts: dict, missing: list[str]) -> str:
+    source_rows = json.dumps(safe_recovery_rows(facts), ensure_ascii=False, indent=2)
+    return f"""
+你负责从出版社选题申报表的脱敏表格文本中找出缺失字段。
+
+只输出严格 JSON，不要解释。不得推测、补写或改写字段值；值必须逐字出现在来源文本中。
+仅处理缺失字段：{json.dumps(missing, ensure_ascii=False)}。
+
+输出结构：
+{{
+  "fields": {{
+    "bookName": {{"value": "选题名称原文，没有则为空", "evidence": "对应字段标签"}},
+    "authorName": {{"value": "第一作者姓名原文，没有则为空", "evidence": "对应字段标签"}}
+  }}
+}}
+
+【脱敏表格文本】
+{source_rows}
+""".strip()
+
+
+def recover_missing_structured_fields(facts: dict) -> dict:
+    recovered = deepcopy(facts if isinstance(facts, dict) else {})
+    recovered["canonical_fields"] = dict(recovered.get("canonical_fields") or {})
+    missing = missing_core_fields(recovered)
+    if not missing:
+        return recovered
+
+    runtime_log(f"structured-field fallback start missing={','.join(missing)}")
+    try:
+        response = call_fast_model(build_structured_field_recovery_prompt(recovered, missing))
+    except ModelServiceError as exc:
+        runtime_log(
+            "structured-field fallback unavailable "
+            f"missing={','.join(missing)} type={type(exc).__name__}"
+        )
+        return recovered
+
+    response_fields = response.get("fields") if isinstance(response, dict) else {}
+    if not isinstance(response_fields, dict):
+        response_fields = {}
+    accepted = []
+    for canonical_name in missing:
+        model_key = RECOVERY_MODEL_KEYS[canonical_name]
+        item = response_fields.get(model_key) or {}
+        if not isinstance(item, dict):
+            continue
+        candidate = strip_indent(str(item.get("value", "")))
+        if canonical_name == "姓名":
+            candidate = clean_person_name(candidate)
+        elif candidate in {"选题名", "选题名称", "教材名称", "书名", "待定"}:
+            candidate = ""
+        if not candidate or not source_contains_candidate(recovered, candidate):
+            continue
+        recovered["canonical_fields"][canonical_name] = candidate
+        recovered.setdefault("recovered_fields", {})[canonical_name] = "model_grounded"
+        accepted.append(canonical_name)
+
+    remaining = missing_core_fields(recovered)
+    runtime_log(
+        "structured-field fallback complete "
+        f"accepted={','.join(accepted) or 'none'} remaining={','.join(remaining) or 'none'}"
+    )
+    return recovered
+
+
 def normalize_generated(result: dict) -> dict:
     sections = []
     section_map = {section.get("key"): section for section in result.get("sections", [])}
@@ -1729,9 +1875,14 @@ def import_bpm_sources(application_bytes: bytes, application_name: str, report_b
             report_path = Path(tmp.name)
         extractor = load_extractor()
         facts = extractor.build_payload(application_path, include_sensitive=True)
+        facts = recover_missing_structured_fields(facts)
         report = extract_planning_report_docx(report_path)
         normalized = normalize_generated(report)
-        normalized["title"] = report.get("title") or normalized["title"]
+        normalized["title"] = first_non_empty(
+            field_value(facts, "教材名称", "选题名称", "选题名", "书名"),
+            report.get("title", ""),
+            normalized["title"],
+        )
         for section in normalized["sections"]:
             section["confirmed"] = True
         normalized["bpmFields"] = report.get("bpmFields", normalized.get("bpmFields", {}))
@@ -1758,9 +1909,14 @@ def generate_report_from_upload(file_bytes: bytes, filename: str) -> dict:
     try:
         extractor = load_extractor()
         facts = extractor.build_payload(tmp_path, include_sensitive=False)
+        facts = recover_missing_structured_fields(facts)
         prompt = build_prompt(facts)
         result = call_complete_report_model(prompt)
         normalized = normalize_generated(result)
+        normalized["title"] = first_non_empty(
+            field_value(facts, "教材名称", "选题名称", "选题名", "书名"),
+            normalized["title"],
+        )
         normalized["bpmTopic"] = build_bpm_topic(facts, normalized)
         return normalized
     finally:
