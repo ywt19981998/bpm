@@ -128,7 +128,7 @@ test("async workspace operations capture and verify the active session generatio
   assert.match(source, /async function refreshBpmJobs\(session = captureSession\(\)\)/);
   assert.match(source, /const session = captureSession\(\);[\s\S]*await assertBackendReady\(session\)/);
   assert.match(source, /if \(!isCurrentSession\(session\)\) return;/);
-  ["/api/import-bpm-sources", "/api/generate-report", "/api/export-docx", "/api/bpm-topic-jobs", "/api/bpm-author-jobs"].forEach((endpoint) => {
+  ["/api/projects/import", "/api/generate-report", "/api/export-docx", "/api/bpm-topic-jobs", "/api/bpm-author-jobs"].forEach((endpoint) => {
     const escaped = endpoint.replaceAll("/", "\\/");
     assert.match(source, new RegExp(`apiFetch\\("${escaped}",[\\s\\S]*?session`));
   });

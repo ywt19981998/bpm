@@ -134,7 +134,15 @@
       grid-template-columns: 332px minmax(620px, 1fr);
     }
 
+    .app.projects-mode {
+      grid-template-columns: 332px minmax(620px, 1fr);
+    }
+
     .app.bpm-mode .right {
+      display: none;
+    }
+
+    .app.projects-mode .right {
       display: none;
     }
 
@@ -340,6 +348,270 @@
       flex-direction: column;
       gap: 16px;
       background: #fbfcff;
+    }
+
+    .project-center-main {
+      min-width: 0;
+      padding: 24px 28px 32px;
+      background: #fbfcff;
+    }
+
+    .project-center-layout {
+      display: grid;
+      gap: 18px;
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+
+    .project-center-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: 0 8px 24px rgba(31, 54, 103, 0.05);
+    }
+
+    .project-stat {
+      min-height: 84px;
+      padding: 16px 18px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-right: 1px solid var(--line);
+    }
+
+    .project-stat:last-child {
+      border-right: 0;
+    }
+
+    .project-stat-icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border-radius: 7px;
+      color: var(--teal);
+      background: var(--teal-soft);
+      flex: 0 0 auto;
+    }
+
+    .project-stat-value {
+      font-size: 23px;
+      line-height: 1;
+      font-weight: 800;
+    }
+
+    .project-stat-label {
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .project-toolbar {
+      display: grid;
+      grid-template-columns: minmax(240px, 1fr) 180px auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .project-search-wrap {
+      position: relative;
+      min-width: 0;
+    }
+
+    .project-search-wrap > i {
+      position: absolute;
+      left: 13px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: #8a97ab;
+      pointer-events: none;
+    }
+
+    .project-toolbar input[type="search"],
+    .project-toolbar select {
+      width: 100%;
+      min-height: 42px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface);
+      color: var(--text);
+    }
+
+    .project-toolbar input[type="search"] {
+      padding: 0 14px 0 40px;
+    }
+
+    .project-toolbar select {
+      padding: 0 12px;
+    }
+
+    .archived-toggle {
+      min-height: 42px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface);
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .archived-toggle input {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--teal);
+    }
+
+    .project-table-shell {
+      min-width: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: auto;
+      box-shadow: 0 8px 24px rgba(31, 54, 103, 0.05);
+    }
+
+    .project-table {
+      width: 100%;
+      min-width: 980px;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    .project-table th {
+      height: 46px;
+      padding: 0 14px;
+      border-bottom: 1px solid var(--line);
+      background: #f7f9fd;
+      color: #69778e;
+      font-size: 12px;
+      font-weight: 700;
+      text-align: left;
+    }
+
+    .project-table td {
+      height: 62px;
+      padding: 8px 14px;
+      border-bottom: 1px solid #edf1f6;
+      vertical-align: middle;
+      overflow: hidden;
+    }
+
+    .project-table tbody tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .project-table tbody tr:hover {
+      background: #f8faff;
+    }
+
+    .project-title-cell {
+      display: grid;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    .project-title-button {
+      min-height: 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      justify-content: flex-start;
+      overflow: hidden;
+      color: var(--text);
+      font-weight: 750;
+    }
+
+    .project-title-button:hover {
+      border: 0;
+      background: transparent;
+      color: var(--teal);
+    }
+
+    .project-title-button span,
+    .project-cell-text {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .project-id-text {
+      color: #8b97aa;
+      font-size: 11px;
+    }
+
+    .project-status {
+      min-width: 68px;
+      height: 26px;
+      padding: 0 9px;
+      border: 1px solid #dce4ef;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #637188;
+      background: #f6f8fb;
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .project-status.ready,
+    .project-status.succeeded,
+    .project-status.confirmed {
+      color: #137957;
+      border-color: #bde8d8;
+      background: #eaf8f2;
+    }
+
+    .project-status.draft,
+    .project-status.queued,
+    .project-status.running {
+      color: #225ec8;
+      border-color: #cbdcff;
+      background: #edf3ff;
+    }
+
+    .project-status.failed {
+      color: var(--red);
+      border-color: #f0b8b3;
+      background: var(--red-soft);
+    }
+
+    .project-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 6px;
+    }
+
+    .project-actions .icon-button {
+      width: 34px;
+      height: 34px;
+      min-height: 34px;
+    }
+
+    .project-table-state {
+      min-height: 250px;
+      display: grid;
+      place-items: center;
+      padding: 30px;
+      color: var(--muted);
+      text-align: center;
+    }
+
+    .project-table-state-copy {
+      display: grid;
+      justify-items: center;
+      gap: 10px;
+    }
+
+    .project-table-state-copy i {
+      color: #91a3c1;
     }
 
     .bpm-layout {
@@ -1221,6 +1493,10 @@
         grid-template-columns: 312px minmax(0, 1fr);
       }
 
+      .app.projects-mode {
+        grid-template-columns: 312px minmax(0, 1fr);
+      }
+
       .sidebar {
         grid-row: 1 / span 2;
         grid-template-columns: 72px minmax(0, 1fr);
@@ -1350,6 +1626,18 @@
         padding: 18px 16px 24px;
       }
 
+      .project-center-main {
+        padding: 18px 16px 24px;
+      }
+
+      .project-toolbar {
+        grid-template-columns: 1fr 180px;
+      }
+
+      .archived-toggle {
+        grid-column: 1 / -1;
+      }
+
       .topbar,
       .editor-foot,
       .file-strip {
@@ -1411,6 +1699,19 @@
 
       .bpm-layout {
         grid-template-columns: 1fr;
+      }
+
+      .project-center-summary {
+        grid-template-columns: 1fr;
+      }
+
+      .project-stat {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .project-stat:last-child {
+        border-bottom: 0;
       }
     }
 
@@ -1474,6 +1775,14 @@
       .quick-import-head {
         align-items: stretch;
         flex-direction: column;
+      }
+
+      .project-toolbar {
+        grid-template-columns: 1fr;
+      }
+
+      .archived-toggle {
+        grid-column: auto;
       }
 
       .tabs {
@@ -1561,7 +1870,11 @@
           <div class="brand-mark"><i data-lucide="blocks" size="20"></i></div>
         </div>
         <nav class="main-menu" aria-label="主要功能">
-          <button class="menu-button active" id="menuReport" title="策划报告">
+          <button class="menu-button active" id="menuProjects" title="选题项目">
+            <i data-lucide="layout-list" size="20"></i>
+            <span>选题项目</span>
+          </button>
+          <button class="menu-button" id="menuReport" title="策划报告">
             <i data-lucide="file-pen-line" size="20"></i>
             <span>策划报告</span>
           </button>
@@ -1662,7 +1975,98 @@
       </div>
     </dialog>
 
-    <main class="main" id="reportView">
+    <main class="project-center-main" id="projectCenterView">
+      <div class="project-center-layout">
+        <div class="topbar">
+          <div class="title-block">
+            <h1>选题项目</h1>
+            <p>每个选题集中保存申报表、策划报告、评分和 BPM 处理状态。</p>
+          </div>
+          <div class="top-actions">
+            <button id="refreshProjects" type="button"><i data-lucide="refresh-cw" size="16"></i>刷新</button>
+            <button class="primary" id="newProjectButton" type="button"><i data-lucide="plus" size="17"></i>新建选题</button>
+          </div>
+        </div>
+
+        <section class="project-center-summary" aria-label="项目概览">
+          <div class="project-stat">
+            <div class="project-stat-icon"><i data-lucide="library" size="18"></i></div>
+            <div>
+              <div class="project-stat-value" id="projectCount">0</div>
+              <div class="project-stat-label">全部选题</div>
+            </div>
+          </div>
+          <div class="project-stat">
+            <div class="project-stat-icon"><i data-lucide="file-check-2" size="18"></i></div>
+            <div>
+              <div class="project-stat-value" id="confirmedProjectCount">0</div>
+              <div class="project-stat-label">报告已确认</div>
+            </div>
+          </div>
+          <div class="project-stat">
+            <div class="project-stat-icon"><i data-lucide="workflow" size="18"></i></div>
+            <div>
+              <div class="project-stat-value" id="completedBpmCount">0</div>
+              <div class="project-stat-label">BPM 已完成</div>
+            </div>
+          </div>
+        </section>
+
+        <div class="project-toolbar">
+          <label class="project-search-wrap">
+            <i data-lucide="search" size="16"></i>
+            <input id="projectSearch" type="search" placeholder="搜索选题名、作者或编辑" autocomplete="off">
+          </label>
+          <select id="projectStatusFilter" aria-label="按状态筛选">
+            <option value="">全部状态</option>
+            <option value="draft">报告草稿</option>
+            <option value="confirmed">报告已确认</option>
+            <option value="ready">BPM 可填报</option>
+            <option value="running">BPM 处理中</option>
+            <option value="succeeded">BPM 已完成</option>
+            <option value="failed">BPM 失败</option>
+          </select>
+          <label class="archived-toggle">
+            <input id="includeArchivedProjects" type="checkbox">
+            <span>显示已归档</span>
+          </label>
+        </div>
+
+        <section class="project-table-shell" aria-live="polite">
+          <table class="project-table">
+            <colgroup>
+              <col style="width: 26%">
+              <col style="width: 12%">
+              <col style="width: 11%">
+              <col style="width: 11%">
+              <col style="width: 11%">
+              <col style="width: 17%">
+              <col style="width: 12%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th>选题名称</th>
+                <th>作者</th>
+                <th>报告状态</th>
+                <th>作译者</th>
+                <th>BPM 状态</th>
+                <th>更新时间</th>
+                <th style="text-align: right">操作</th>
+              </tr>
+            </thead>
+            <tbody id="projectTableBody"></tbody>
+          </table>
+          <div class="project-table-state" id="projectTableState">
+            <div class="project-table-state-copy">
+              <i data-lucide="loader-circle" size="26"></i>
+              <span>正在读取选题项目...</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <main class="main" id="reportView" hidden>
       <div class="topbar">
         <div class="title-block">
           <h1>选题策划报告</h1>
@@ -1884,7 +2288,7 @@
         title: "一、选题内容",
         sub: "出版导向、出版定位、内容简介、内容创新及版权许可等",
         confirmed: false,
-        text: "　　本选题坚持正确的政治方向、出版导向和价值取向，依据教育部《医药类专业大学物理课程教学基本要求》（2021年版）编写，面向医药类专业本科教学需求，服务新医科建设、医工交叉人才培养和医学基础课程改革。选题定位为面向临床医学、医学影像学、生物医学工程、药学等专业的本科公共基础课程教材，兼顾长学制医学生及相关教学科研人员参考使用。\n\n　　全书以“医工深度融合、应用导向重构”为核心理念，预计约300千字，共三篇十五章，系统涵盖力学与生物力学基础、电磁学与医用电工学、光学与近代物理及医学影像三大知识板块。教材从“物理学与现代医学”的关系入手，将力学、电磁学、光学、原子核物理、X射线、磁共振成像等基础内容与医学诊断、治疗、检测和医学工程场景结合，形成从基础原理到临床应用的完整知识链条。\n\n　　本书创新点主要体现在三方面：一是突出医工融合，每章以临床案例导学，将抽象物理原理与医学应用场景深度绑定；二是采用“核心必学-选学拓展-应用拓展”的分层编排方式，便于不同专业、不同学时灵活选用；三是建设新形态教材资源，关键知识点配讲解视频和动画演示，形成“纸质+数字”一体化智慧学习环境。"
+        text: ""
       },
       {
         key: "author",
@@ -1893,7 +2297,7 @@
         title: "二、作者情况",
         sub: "第一作者及团队情况",
         confirmed: false,
-        text: "　　第一作者周丽丽，赣南医科大学教授，博士毕业于湖南大学凝聚态物理专业，现从事材料科学及医学物理相关教学科研工作。作者长期承担“医用物理学”“普通物理学”“医学影像原理与设备”等本科课程教学，其中“医用物理学”自2011年至今持续授课，具有较扎实的课程建设经验和面向医药类专业学生的教学实践积累。\n\n　　作者具有较好的教材建设和课程改革基础，已出版《医用物理学》《医用物理学实验指导》《现代医学物理》等教材或著作，并参与国家基金评审、期刊论文评审等学术工作。本书参编团队主要来自赣南医科大学，成员职称结构覆盖教授、副教授和讲师，分工较明确，具备完成本教材编写和后续教学推广的基础。"
+        text: ""
       },
       {
         key: "feasibility",
@@ -1902,7 +2306,7 @@
         title: "三、策划过程与可行性",
         sub: "选题来源及策划思路、选题把控能力及出版进度等",
         confirmed: false,
-        text: "　　本选题来源于医药类专业大学物理课程教学改革的实际需求。传统医学物理教材通常重视知识体系完整性，但在临床问题导入、医学工程应用、分层教学设计和数字化资源支撑方面仍有进一步优化空间。本书围绕这一教学痛点，将医学物理基础课程从“知识讲授型”进一步转向“应用理解型”和“医工融合型”。\n\n　　从进度看，申报表中已列明2026年6月完成大纲，2026年8月完成书稿，2026年9月完成审定并交出版社，计划2027年6月出版、2027年7月见样书、2027年9月供大一新生开课使用。作者团队分工已明确，课程资源和教学基础较充分，整体具备推进选题出版的可行性。"
+        text: ""
       },
       {
         key: "award",
@@ -1911,7 +2315,7 @@
         title: "四、获奖潜质",
         sub: "获奖预期及版权输出等",
         confirmed: false,
-        text: "　　本书面向医药类本科公共基础课程，具有较明确的课程适配场景和教学改革基础。教材以医工融合为主线，兼顾课程思政、新形态资源建设、虚拟仿真实验和临床案例导入，符合当前医学教育改革和新医科建设方向。若后续在教学课件、在线题库、习题解析、实验指导、案例资源和数字资源方面形成系统配套，具备进一步培育为校级、省级优质教材或新形态教材建设成果的潜力。\n\n　　版权输出方面，本书以国内医药类本科教学为主要对象，短期以中文教材推广和数字资源建设为主，后续可根据使用反馈再评估数字课程、资源包授权或区域教学共同体推广空间。"
+        text: ""
       },
       {
         key: "profit",
@@ -1920,7 +2324,7 @@
         title: "五、成本与盈利估算",
         sub: "成本收益测算、资助与包销等",
         confirmed: false,
-        text: "　　（一）纸质教材\n　　1.出版规格\n　　（1）版权字数： 350 千字。\n　　（2）印张： 14。\n　　（3）正文印刷色数：  单色。\n\n　　2.盈利估算\n　　（1）定价：  59.8  元。\n　　（2）版税（率）：  8%。\n　　（3）发货折扣：    65%。\n　　（4）预估首印数：   1200册。\n　　（5）预估总印数：   3000册。\n　　（6）包销册数：     0册；包销折扣： 0 %。\n　　（7）出版资助：   \n　　（8）预计总毛利润：   "
+        text: ""
       },
       {
         key: "marketing",
@@ -1929,7 +2333,7 @@
         title: "六、市场定位与营销",
         sub: "目标读者、竞品比较、营销渠道、配套资源等",
         confirmed: false,
-        text: "　　本书目标读者定位较清晰，主要面向临床医学、医学影像学、生物医学工程、预防医学、药学等专业本科生，也可供长学制医学生、医学物理相关课程教师及教学科研人员参考。教材适用于本科层次公共课或专业基础课程，总学时80学时，其中理论60学时、实验20学时，可服务于医学院校医学物理学、医用物理学及相关课程建设。\n\n　　在竞品层面，人民卫生出版社等已有《医学物理学》教材体系成熟、内容全面，具有较强的课程基础性。本书的市场差异化主要在于：以“医工深度融合、应用导向重构”为核心理念，突出临床案例导学和医学工程应用；采用分层教学结构，便于不同专业按核心内容和拓展内容灵活取舍；强调新形态资源建设，通过视频、动画、二维码资源、在线题库和习题解析增强教学服务能力。\n\n　　营销方面，可优先依托作者所在课程团队的教学基础和本校年用量，形成稳定首批使用场景；同时面向医学院校相关专业开展样书寄送、课程负责人沟通和教师试用反馈。"
+        text: ""
       }
     ];
 
@@ -1951,6 +2355,13 @@
     let authorMaintenance = null;
     let currentUser = null;
     let bpmCredentialConfigured = false;
+    let projects = [];
+    let currentProject = null;
+    let currentProjectVersion = null;
+    let currentProjectFiles = [];
+    let projectSaveState = "saved";
+    let creatingNewProject = false;
+    let projectSearchTimer = null;
     const tabs = document.getElementById("tabs");
     const sectionTitle = document.getElementById("sectionTitle");
     const sectionSub = document.getElementById("sectionSub");
@@ -1968,6 +2379,12 @@
     const bpmStatus = document.getElementById("bpmStatus");
     const reportView = document.getElementById("reportView");
     const bpmView = document.getElementById("bpmView");
+    const projectCenterView = document.getElementById("projectCenterView");
+    const projectTableBody = document.getElementById("projectTableBody");
+    const projectTableState = document.getElementById("projectTableState");
+    const projectSearch = document.getElementById("projectSearch");
+    const projectStatusFilter = document.getElementById("projectStatusFilter");
+    const includeArchivedProjects = document.getElementById("includeArchivedProjects");
     const bpmPreview = document.getElementById("bpmPreview");
     const bpmJobs = document.getElementById("bpmJobs");
     const bpmProgressPanel = document.getElementById("bpmProgressPanel");
@@ -2170,6 +2587,12 @@
       docxExported = false;
       bpmTopic = null;
       authorMaintenance = null;
+      projects = [];
+      currentProject = null;
+      currentProjectVersion = null;
+      currentProjectFiles = [];
+      projectSaveState = "saved";
+      creatingNewProject = false;
       sections.forEach((section) => {
         section.text = "";
         section.confirmed = false;
@@ -2198,12 +2621,18 @@
       ["importBpmSources", "generateAll", "queueBpm", "queueAuthor", "saveBpmCredentials", "logoutButton"].forEach((id) => {
         document.getElementById(id).disabled = false;
       });
-      reportView.hidden = false;
+      projectCenterView.hidden = false;
+      reportView.hidden = true;
       bpmView.hidden = true;
-      document.getElementById("menuReport").classList.add("active");
+      workspace.classList.add("projects-mode");
+      workspace.classList.remove("bpm-mode");
+      document.getElementById("menuProjects").classList.add("active");
+      document.getElementById("menuReport").classList.remove("active");
       document.getElementById("menuBpm").classList.remove("active");
       sectionText.value = "";
       scoreRows.replaceChildren();
+      projectTableBody.replaceChildren();
+      projectTableState.hidden = false;
       renderAuthorStatus(null);
       bpmPreview.replaceChildren(createEmptyState("先在“策划报告”菜单上传申报表并生成内容。"));
       bpmJobs.replaceChildren(createEmptyState("暂无 BPM 任务"));
@@ -2268,6 +2697,8 @@
       renderBpmPreview();
       loadBpmCredentialStatus();
       refreshBpmJobs();
+      switchMainView("projects");
+      loadProjects();
       if (window.lucide) window.lucide.createIcons();
     }
 
@@ -2436,12 +2867,17 @@
     }
 
     function switchMainView(view) {
+      const isProjects = view === "projects";
       const isBpm = view === "bpm";
-      document.getElementById("workspace").classList.toggle("bpm-mode", isBpm);
-      reportView.hidden = isBpm;
+      workspace.classList.toggle("projects-mode", isProjects);
+      workspace.classList.toggle("bpm-mode", isBpm);
+      projectCenterView.hidden = !isProjects;
+      reportView.hidden = isProjects || isBpm;
       bpmView.hidden = !isBpm;
-      document.getElementById("menuReport").classList.toggle("active", !isBpm);
+      document.getElementById("menuProjects").classList.toggle("active", isProjects);
+      document.getElementById("menuReport").classList.toggle("active", view === "report");
       document.getElementById("menuBpm").classList.toggle("active", isBpm);
+      if (isProjects) loadProjects();
       if (isBpm) {
         saveActiveText();
         renderBpmPreview();
@@ -2462,6 +2898,244 @@
       empty.className = "preview-empty";
       empty.textContent = message;
       return empty;
+    }
+
+    function projectStatusLabel(kind, status) {
+      const labels = {
+        report: { empty: "未生成", draft: "草稿", confirmed: "已确认" },
+        author: { unknown: "待识别", ready: "已准备", queued: "排队中", running: "处理中", succeeded: "已完成", failed: "失败" },
+        bpm: { not_ready: "未就绪", ready: "可填报", queued: "排队中", running: "填报中", succeeded: "已完成", failed: "失败" }
+      };
+      return labels[kind]?.[status] || status || "未知";
+    }
+
+    function createProjectStatus(kind, status) {
+      const badge = document.createElement("span");
+      badge.className = `project-status ${status || ""}`;
+      badge.textContent = projectStatusLabel(kind, status);
+      return badge;
+    }
+
+    function renderProjectTable() {
+      document.getElementById("projectCount").textContent = String(projects.length);
+      document.getElementById("confirmedProjectCount").textContent = String(
+        projects.filter((project) => project.reportStatus === "confirmed").length
+      );
+      document.getElementById("completedBpmCount").textContent = String(
+        projects.filter((project) => project.bpmStatus === "succeeded").length
+      );
+      if (!projects.length) {
+        projectTableBody.replaceChildren();
+        projectTableState.hidden = false;
+        const shell = document.createElement("div");
+        shell.className = "project-table-state-copy";
+        shell.append(createLucideIcon("folder-open", 28));
+        const message = document.createElement("span");
+        message.textContent = projectSearch.value.trim()
+          ? "没有找到匹配的选题项目"
+          : "还没有选题项目，从上传一份申报表开始";
+        shell.append(message);
+        projectTableState.replaceChildren(shell);
+        if (window.lucide) window.lucide.createIcons();
+        return;
+      }
+
+      const rows = projects.map((project) => {
+        const row = document.createElement("tr");
+        const titleCell = document.createElement("td");
+        const authorCell = document.createElement("td");
+        const reportCell = document.createElement("td");
+        const authorStatusCell = document.createElement("td");
+        const bpmCell = document.createElement("td");
+        const updatedCell = document.createElement("td");
+        const actionsCell = document.createElement("td");
+
+        const titleWrap = document.createElement("div");
+        titleWrap.className = "project-title-cell";
+        const openTitle = document.createElement("button");
+        openTitle.type = "button";
+        openTitle.className = "project-title-button";
+        openTitle.title = project.title || "";
+        const titleText = document.createElement("span");
+        titleText.textContent = project.title || "未命名选题";
+        openTitle.append(titleText);
+        openTitle.addEventListener("click", () => openProject(project.id));
+        const idText = document.createElement("span");
+        idText.className = "project-id-text";
+        idText.textContent = project.archivedAt ? "已归档" : `项目 ${String(project.id || "").slice(0, 8)}`;
+        titleWrap.append(openTitle, idText);
+        titleCell.append(titleWrap);
+
+        authorCell.className = "project-cell-text";
+        authorCell.textContent = project.authorName || "待识别";
+        authorCell.title = project.authorName || "";
+        reportCell.append(createProjectStatus("report", project.reportStatus));
+        authorStatusCell.append(createProjectStatus("author", project.authorStatus));
+        bpmCell.append(createProjectStatus("bpm", project.bpmStatus));
+        updatedCell.className = "project-cell-text";
+        updatedCell.textContent = project.updatedAt || "";
+
+        const actionWrap = document.createElement("div");
+        actionWrap.className = "project-actions";
+        const openButton = document.createElement("button");
+        openButton.type = "button";
+        openButton.className = "icon-button";
+        openButton.title = "打开项目";
+        openButton.setAttribute("aria-label", `打开${project.title || "选题项目"}`);
+        openButton.append(createLucideIcon("arrow-up-right", 16));
+        openButton.addEventListener("click", () => openProject(project.id));
+        actionWrap.append(openButton);
+        if (!project.archivedAt) {
+          const archiveButton = document.createElement("button");
+          archiveButton.type = "button";
+          archiveButton.className = "icon-button";
+          archiveButton.title = "归档项目";
+          archiveButton.setAttribute("aria-label", `归档${project.title || "选题项目"}`);
+          archiveButton.append(createLucideIcon("archive", 16));
+          archiveButton.addEventListener("click", async () => {
+            currentProject = project;
+            currentProjectVersion = project.version;
+            await archiveCurrentProject();
+          });
+          actionWrap.append(archiveButton);
+        }
+        actionsCell.append(actionWrap);
+        row.append(titleCell, authorCell, reportCell, authorStatusCell, bpmCell, updatedCell, actionsCell);
+        return row;
+      });
+      projectTableState.hidden = true;
+      projectTableBody.replaceChildren(...rows);
+      if (window.lucide) window.lucide.createIcons();
+    }
+
+    async function loadProjects(session = captureSession()) {
+      if (!currentUser || !isCurrentSession(session)) return;
+      projectTableState.hidden = false;
+      projectTableState.replaceChildren(createEmptyState("正在读取选题项目..."));
+      const query = new URLSearchParams();
+      if (projectSearch.value.trim()) query.set("q", projectSearch.value.trim());
+      if (projectStatusFilter.value) query.set("status", projectStatusFilter.value);
+      if (includeArchivedProjects.checked) query.set("includeArchived", "true");
+      try {
+        const suffix = query.toString() ? `?${query}` : "";
+        const response = await apiFetch(`/api/projects${suffix}`, { cache: "no-store", session });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) throw new Error(await responseError(response, "无法读取选题项目"));
+        const data = await response.json();
+        if (!isCurrentSession(session)) return;
+        projects = Array.isArray(data.projects) ? data.projects : [];
+        renderProjectTable();
+      } catch (error) {
+        if (!isCurrentSession(session)) return;
+        projects = [];
+        projectTableBody.replaceChildren();
+        projectTableState.hidden = false;
+        projectTableState.replaceChildren(createEmptyState(error.message || "选题项目读取失败"));
+      }
+    }
+
+    function hydrateProject(project, files = []) {
+      currentProject = project;
+      currentProjectVersion = project.version;
+      currentProjectFiles = Array.isArray(files) ? files : [];
+      const state = project.state || {};
+      const savedSections = Array.isArray(state.sections) ? state.sections : [];
+      sections.forEach((target) => {
+        const saved = savedSections.find((item) => item.key === target.key) || {};
+        target.text = String(saved.text || "");
+        target.confirmed = Boolean(saved.confirmed);
+      });
+      const savedScores = Array.isArray(state.scoreItems) ? state.scoreItems : [];
+      scoreItems.forEach((target) => {
+        const saved = savedScores.find((item) => Array.isArray(item) && item[0] === target[0]);
+        target[2] = saved ? Number(saved[2] || 0) : 0;
+      });
+      bpmTopic = state.bpmTopic && typeof state.bpmTopic === "object" ? { ...state.bpmTopic } : null;
+      authorMaintenance = state.authorMaintenance && typeof state.authorMaintenance === "object"
+        ? { ...state.authorMaintenance }
+        : bpmTopic?.authorMaintenance || null;
+      docxExported = Boolean(state.docxExported);
+      uploadedFile = null;
+      activeIndex = 0;
+      document.getElementById("projectName").textContent = project.title || "未命名选题";
+      document.getElementById("projectMeta").textContent = `${project.editorName || bpmEditorName()} · ${projectStatusLabel("report", project.reportStatus)}`;
+      const application = currentProjectFiles.find((file) => file.kind === "application");
+      document.getElementById("fileName").textContent = application?.originalName || "项目尚未上传申报表";
+      document.getElementById("fileState").textContent = application ? "已保存在项目中" : "等待上传";
+      renderAuthorStatus(authorMaintenance);
+      scoreRows.replaceChildren();
+      render();
+      renderBpmPreview();
+      updateWorkflowByState(docxExported);
+      localStorage.setItem(`phei-current-project:${currentUser.id}`, project.id);
+    }
+
+    async function openProject(projectId, session = captureSession()) {
+      if (!projectId || !isCurrentSession(session)) return;
+      try {
+        const response = await apiFetch(`/api/projects/${projectId}`, { cache: "no-store", session });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) throw new Error(await responseError(response, "无法打开选题项目"));
+        const data = await response.json();
+        if (!isCurrentSession(session)) return;
+        hydrateProject(data.project, data.files);
+        switchMainView("report");
+      } catch (error) {
+        if (!isCurrentSession(session)) return;
+        showToast(error.message || "无法打开选题项目");
+      }
+    }
+
+    function titleFromApplicationName(filename) {
+      return String(filename || "")
+        .replace(/\.docx$/i, "")
+        .replace(/^电子工业出版社[^-]*-?/, "")
+        .replace(/[《》]/g, "")
+        .trim() || "未命名选题";
+    }
+
+    async function createProjectFromApplication(file, session = captureSession()) {
+      if (!file || !isCurrentSession(session)) return null;
+      const title = titleFromApplicationName(file.name);
+      const response = await apiFetch("/api/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+        session
+      });
+      if (!isCurrentSession(session)) return null;
+      if (!response.ok) throw new Error(await responseError(response, "新建选题项目失败"));
+      const data = await response.json();
+      if (!isCurrentSession(session)) return null;
+      hydrateProject(data.project, data.files);
+      uploadedFile = file;
+      document.getElementById("fileName").textContent = file.name;
+      document.getElementById("fileState").textContent = "已选择 · 等待解析和生成";
+      document.getElementById("projectMeta").textContent = "待生成策划报告";
+      switchMainView("report");
+      return data.project;
+    }
+
+    async function archiveCurrentProject(session = captureSession()) {
+      if (!currentProject || !isCurrentSession(session)) return;
+      if (!window.confirm(`确认归档《${currentProject.title}》？归档后仍可在项目列表中查看。`)) return;
+      const response = await apiFetch(`/api/projects/${currentProject.id}/archive`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ version: currentProjectVersion }),
+        session
+      });
+      if (!isCurrentSession(session)) return;
+      if (!response.ok) {
+        showToast(await responseError(response, "归档项目失败"));
+        return;
+      }
+      currentProject = null;
+      currentProjectVersion = null;
+      currentProjectFiles = [];
+      switchMainView("projects");
+      await loadProjects(session);
+      showToast("项目已归档");
     }
 
     function renderPending(items) {
@@ -2828,8 +3502,14 @@
       if (!isCurrentSession(session)) return false;
       const { markConfirmed = false, meta = "已生成策划报告草稿" } = options;
       docxExported = false;
-      if (data.title) {
-        document.getElementById("projectName").textContent = data.title;
+      if (data.project) {
+        currentProject = data.project;
+        currentProjectVersion = data.project.version;
+        currentProjectFiles = Array.isArray(data.files) ? data.files : currentProjectFiles;
+        localStorage.setItem(`phei-current-project:${currentUser.id}`, data.project.id);
+      }
+      if (data.project?.title || data.title) {
+        document.getElementById("projectName").textContent = data.project?.title || data.title;
       }
       document.getElementById("projectMeta").textContent = meta;
       if (Array.isArray(data.sections)) {
@@ -2847,12 +3527,12 @@
           target[2] = Number(incoming[2] || 0);
         });
       }
-      bpmTopic = data.bpmTopic || null;
+      bpmTopic = data.bpmTopic || data.project?.state?.bpmTopic || null;
       if (bpmTopic && data.bpmFields) {
         bpmTopic.feature = data.bpmFields.feature || bpmTopic.feature;
         bpmTopic.compare = data.bpmFields.compare || bpmTopic.compare;
       }
-      renderAuthorStatus(bpmTopic ? bpmTopic.authorMaintenance : null);
+      renderAuthorStatus(data.authorMaintenance || bpmTopic?.authorMaintenance || data.project?.state?.authorMaintenance || null);
       renderBpmPreview();
       renderPending(data.pending_questions || []);
       scoreRows.replaceChildren();
@@ -2933,7 +3613,18 @@
     });
 
     document.getElementById("newTopicButton").addEventListener("click", () => {
-      switchMainView("report");
+      creatingNewProject = true;
+      currentProject = null;
+      currentProjectVersion = null;
+      resetFileInput("fileInput");
+      document.getElementById("fileInput").click();
+    });
+
+    document.getElementById("newProjectButton").addEventListener("click", () => {
+      creatingNewProject = true;
+      currentProject = null;
+      currentProjectVersion = null;
+      resetFileInput("fileInput");
       document.getElementById("fileInput").click();
     });
 
@@ -2945,8 +3636,16 @@
       document.getElementById("quickReportInput").click();
     });
 
+    document.getElementById("menuProjects").addEventListener("click", () => switchMainView("projects"));
     document.getElementById("menuReport").addEventListener("click", () => switchMainView("report"));
     document.getElementById("menuBpm").addEventListener("click", () => switchMainView("bpm"));
+    document.getElementById("refreshProjects").addEventListener("click", () => loadProjects());
+    projectSearch.addEventListener("input", () => {
+      window.clearTimeout(projectSearchTimer);
+      projectSearchTimer = window.setTimeout(() => loadProjects(), 260);
+    });
+    projectStatusFilter.addEventListener("change", () => loadProjects());
+    includeArchivedProjects.addEventListener("change", () => loadProjects());
     document.getElementById("bpmSettingsButton").addEventListener("click", openBpmSettingsDialog);
     document.getElementById("openBpmSettingsFromTask").addEventListener("click", openBpmSettingsDialog);
     document.getElementById("closeBpmSettings").addEventListener("click", closeBpmSettingsDialog);
@@ -3023,7 +3722,7 @@
       }
     });
 
-    document.getElementById("fileInput").addEventListener("change", (event) => {
+    document.getElementById("fileInput").addEventListener("change", async (event) => {
       const file = event.target.files[0];
       if (!file) return;
       if (!file.name.toLowerCase().endsWith(".docx")) {
@@ -3031,12 +3730,25 @@
         event.target.value = "";
         return;
       }
-      uploadedFile = file;
+      const session = captureSession();
+      if (creatingNewProject || !currentProject) {
+        try {
+          await createProjectFromApplication(file, session);
+        } catch (error) {
+          if (isCurrentSession(session)) showToast(error.message || "新建选题项目失败");
+          event.target.value = "";
+          return;
+        } finally {
+          creatingNewProject = false;
+        }
+      } else {
+        uploadedFile = file;
+      }
+      if (!isCurrentSession(session)) return;
       docxExported = false;
       document.getElementById("fileName").textContent = file.name;
       document.getElementById("fileState").textContent = "已选择 · 等待解析和生成";
-      const projectTitle = file.name.replace(/\.(docx?|DOCX?)$/, "").replace(/^电子工业出版社[^-]*-?/, "") || "新建选题";
-      document.getElementById("projectName").textContent = projectTitle;
+      document.getElementById("projectName").textContent = currentProject?.title || titleFromApplicationName(file.name);
       document.getElementById("projectMeta").textContent = "待生成策划报告";
       renderAuthorStatus(null);
       updateWorkflowByState();
@@ -3087,7 +3799,7 @@
         const form = new FormData();
         form.append("application", applicationFile);
         form.append("report", reportFile);
-        const response = await apiFetch("/api/import-bpm-sources", {
+        const response = await apiFetch("/api/projects/import", {
           method: "POST",
           body: form,
           session
@@ -3170,6 +3882,10 @@
         if (!(await assertBackendReady(session)) || !isCurrentSession(session)) return;
         const form = new FormData();
         form.append("file", file);
+        if (currentProject) {
+          form.append("projectId", currentProject.id);
+          form.append("version", String(currentProjectVersion));
+        }
 
         const response = await apiFetch("/api/generate-report", {
           method: "POST",
@@ -3222,13 +3938,12 @@
         showToast(`还有 ${unconfirmed.length} 段未确认`);
         return;
       }
-	      const payload = {
-	        title: document.getElementById("projectName").textContent || "选题策划报告",
-	        editorName: bpmEditorName(),
-	        sections,
-	        scores: scoreItems,
-	        total: scoreItems.reduce((sum, item) => sum + Number(item[2] || 0), 0)
-      };
+      if (!currentProject) {
+        showToast("请先新建或打开一个选题项目");
+        return;
+      }
+	    const payload = { projectId: currentProject.id };
+      const exportTitle = currentProject.title || document.getElementById("projectName").textContent;
       try {
         const response = await apiFetch("/api/export-docx", {
           method: "POST",
@@ -3247,12 +3962,13 @@
         const url = URL.createObjectURL(blob);
 	        const a = document.createElement("a");
 	        a.href = url;
-	        a.download = reportFileName(payload.title, payload.editorName);
+	        a.download = reportFileName(exportTitle, bpmEditorName());
 	        a.click();
         URL.revokeObjectURL(url);
         document.getElementById("previewEmpty").hidden = true;
         document.getElementById("previewImage").hidden = false;
         docxExported = true;
+        if (currentProject?.state) currentProject.state.docxExported = true;
         updateWorkflowByState(true);
         showToast("DOCX 已生成");
       } catch (error) {
