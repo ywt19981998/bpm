@@ -97,12 +97,13 @@ test("business API requests use apiFetch and expired sessions return to login", 
   assert.doesNotMatch(source, /\bfetch\("\/api\//);
 });
 
-test("drafts are reset and restored only in the authenticated user's namespace", () => {
+test("legacy drafts migrate into the authenticated user's project namespace", () => {
   assert.match(source, /function draftStorageKey\(user\)[\s\S]*user\.id/);
-  assert.match(source, /function loadUserDraft\(user\)/);
+  assert.match(source, /async function migrateLegacyDraft\(user/);
   assert.match(source, /function showAuthView\([^)]*\)[\s\S]*clearWorkspaceState\(\)/);
-  assert.match(source, /function showWorkspace\(user\)[\s\S]*clearWorkspaceState\(\)[\s\S]*loadUserDraft\(user\)/);
-  assert.match(source, /localStorage\.setItem\(draftStorageKey\(currentUser\)/);
+  assert.match(source, /function showWorkspace\(user\)[\s\S]*clearWorkspaceState\(\)[\s\S]*migrateLegacyDraft\(user/);
+  assert.doesNotMatch(source, /localStorage\.setItem\(draftStorageKey\(currentUser\)/);
+  assert.match(source, /localStorage\.removeItem\(draftStorageKey\(user\)\)/);
   assert.doesNotMatch(source, /localStorage\.getItem\(draftKey\)/);
   assert.doesNotMatch(source, /phei-report-draft-v2/);
 });

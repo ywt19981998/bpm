@@ -779,6 +779,35 @@
       flex-wrap: wrap;
     }
 
+    .project-save-status {
+      min-width: 68px;
+      height: 28px;
+      padding: 0 9px;
+      border: 1px solid #cfe1d8;
+      border-radius: 999px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      color: #137957;
+      background: #edf9f4;
+      font-size: 12px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .project-save-status.dirty,
+    .project-save-status.saving {
+      color: #225ec8;
+      border-color: #cbdcff;
+      background: #edf3ff;
+    }
+
+    .project-save-status.conflict {
+      color: var(--red);
+      border-color: #f0b8b3;
+      background: var(--red-soft);
+    }
+
     .file-strip {
       border: 1px solid var(--line);
       background: var(--surface);
@@ -798,6 +827,90 @@
       padding: 14px;
       display: grid;
       gap: 12px;
+    }
+
+    .preflight-panel {
+      display: grid;
+      gap: 12px;
+    }
+
+    .preflight-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .preflight-summary {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+      text-align: right;
+    }
+
+    .preflight-summary.ready {
+      color: #137957;
+    }
+
+    .preflight-summary.blocked {
+      color: var(--red);
+    }
+
+    .preflight-table-shell {
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+    }
+
+    .preflight-table {
+      width: 100%;
+      min-width: 680px;
+      border-collapse: collapse;
+      table-layout: fixed;
+      font-size: 12px;
+    }
+
+    .preflight-table th,
+    .preflight-table td {
+      padding: 9px 11px;
+      border-bottom: 1px solid #edf1f6;
+      text-align: left;
+      vertical-align: middle;
+    }
+
+    .preflight-table th {
+      color: #69778e;
+      background: #f7f9fd;
+      font-weight: 700;
+    }
+
+    .preflight-table tbody tr:last-child td {
+      border-bottom: 0;
+    }
+
+    .preflight-value {
+      max-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--text);
+    }
+
+    .preflight-source {
+      color: var(--muted);
+    }
+
+    .preflight-state {
+      font-weight: 700;
+      color: #137957;
+    }
+
+    .preflight-state.blocking_missing {
+      color: var(--red);
+    }
+
+    .preflight-state.optional_missing {
+      color: var(--amber);
     }
 
     .quick-import-head {
@@ -2073,6 +2186,7 @@
           <p>上传申报表后生成一到六部分，正文段落默认首行空两格。</p>
         </div>
         <div class="top-actions">
+          <span class="project-save-status" id="projectSaveStatus">已保存</span>
           <button id="saveDraft"><i data-lucide="save" size="16"></i>保存草稿</button>
           <button class="primary" id="exportDocx"><i data-lucide="download" size="16"></i>导出 DOCX</button>
         </div>
@@ -2191,6 +2305,32 @@
         </div>
         <div class="progress-track">
           <div class="progress-bar" id="bpmProgressBar"></div>
+        </div>
+      </section>
+
+      <section class="panel preflight-panel" aria-live="polite">
+        <div class="preflight-head">
+          <h3 class="panel-title"><i data-lucide="scan-search" size="16"></i>BPM 填报前检查</h3>
+          <div class="preflight-summary" id="projectPreflightSummary">请先打开一个选题项目</div>
+        </div>
+        <div class="preflight-table-shell">
+          <table class="preflight-table">
+            <colgroup>
+              <col style="width: 22%">
+              <col style="width: 48%">
+              <col style="width: 16%">
+              <col style="width: 14%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th>字段</th>
+                <th>内容</th>
+                <th>来源</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody id="projectPreflightBody"></tbody>
+          </table>
         </div>
       </section>
 
@@ -2360,6 +2500,9 @@
     let currentProjectVersion = null;
     let currentProjectFiles = [];
     let projectSaveState = "saved";
+    let projectAutosaveTimer = null;
+    let projectSaveInFlight = false;
+    let currentProjectPreflight = null;
     let creatingNewProject = false;
     let projectSearchTimer = null;
     const tabs = document.getElementById("tabs");
@@ -2385,6 +2528,10 @@
     const projectSearch = document.getElementById("projectSearch");
     const projectStatusFilter = document.getElementById("projectStatusFilter");
     const includeArchivedProjects = document.getElementById("includeArchivedProjects");
+    const projectSaveStatus = document.getElementById("projectSaveStatus");
+    const projectPreflightSummary = document.getElementById("projectPreflightSummary");
+    const projectPreflightBody = document.getElementById("projectPreflightBody");
+    const queueBpm = document.getElementById("queueBpm");
     const bpmPreview = document.getElementById("bpmPreview");
     const bpmJobs = document.getElementById("bpmJobs");
     const bpmProgressPanel = document.getElementById("bpmProgressPanel");
@@ -2545,6 +2692,7 @@
         const status = await response.json();
         if (!isCurrentSession(session)) return;
         setBpmCredentialStatus(status);
+        if (currentProject && !bpmView.hidden) await loadProjectPreflight(session);
       } catch (error) {
         if (!isCurrentSession(session)) return;
         bpmCredentialConfigured = false;
@@ -2580,6 +2728,9 @@
 
     function clearWorkspaceState() {
       clearInterval(progressTimer);
+      window.clearTimeout(projectAutosaveTimer);
+      projectAutosaveTimer = null;
+      projectSaveInFlight = false;
       activeIndex = 0;
       uploadedFile = null;
       quickApplicationFile = null;
@@ -2592,6 +2743,7 @@
       currentProjectVersion = null;
       currentProjectFiles = [];
       projectSaveState = "saved";
+      currentProjectPreflight = null;
       creatingNewProject = false;
       sections.forEach((section) => {
         section.text = "";
@@ -2633,35 +2785,64 @@
       scoreRows.replaceChildren();
       projectTableBody.replaceChildren();
       projectTableState.hidden = false;
+      setProjectSaveState("saved");
+      renderProjectPreflight(null);
       renderAuthorStatus(null);
       bpmPreview.replaceChildren(createEmptyState("先在“策划报告”菜单上传申报表并生成内容。"));
       bpmJobs.replaceChildren(createEmptyState("暂无 BPM 任务"));
     }
 
-    function loadUserDraft(user) {
+    async function migrateLegacyDraft(user, session = captureSession()) {
       const cached = localStorage.getItem(draftStorageKey(user));
-      if (!cached) return;
+      if (!cached || !isCurrentSession(session)) return false;
+      const migrationKey = `phei-draft-migration:${user.id}`;
+      const offeredKey = `${migrationKey}:offered`;
+      if (localStorage.getItem(migrationKey) || sessionStorage.getItem(offeredKey)) return false;
       try {
         const data = JSON.parse(cached);
-        if (Array.isArray(data.sections)) {
-          data.sections.forEach((saved, index) => {
-            const target = sections[index];
-            if (!target || !saved || typeof saved !== "object") return;
-            target.text = String(saved.text || "");
-            target.confirmed = Boolean(saved.confirmed);
-          });
+        const savedSections = Array.isArray(data.sections) ? data.sections : [];
+        if (!savedSections.some((item) => String(item?.text || "").trim())) return false;
+        sessionStorage.setItem(offeredKey, "1");
+        if (!window.confirm("检测到旧版浏览器草稿，是否迁移到新的选题项目中？迁移成功前不会删除原草稿。")) {
+          return false;
         }
-        if (Array.isArray(data.scoreItems)) {
-          data.scoreItems.forEach((saved, index) => {
-            const target = scoreItems[index];
-            const score = Array.isArray(saved) ? Number(saved[2]) : Number.NaN;
-            if (target && Number.isFinite(score)) target[2] = Math.max(0, Math.min(target[1], score));
-          });
-        }
-        bpmTopic = data.bpmTopic && typeof data.bpmTopic === "object" ? data.bpmTopic : null;
-        renderAuthorStatus(data.authorMaintenance || bpmTopic?.authorMaintenance || null);
+        const legacyTopic = data.bpmTopic && typeof data.bpmTopic === "object" ? data.bpmTopic : {};
+        const response = await apiFetch("/api/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: String(legacyTopic.bookName || "迁移的本地草稿"),
+            state: {
+              sections: savedSections.map((item, index) => ({
+                key: item?.key || sections[index]?.key,
+                title: item?.title || sections[index]?.title,
+                text: String(item?.text || ""),
+                confirmed: Boolean(item?.confirmed)
+              })),
+              scoreItems: Array.isArray(data.scoreItems) ? data.scoreItems : [],
+              bpmTopic: legacyTopic,
+              authorMaintenance: data.authorMaintenance || legacyTopic.authorMaintenance || {},
+              fieldSources: data.fieldSources || {},
+              sourceFiles: { application: { missing: true } },
+              docxExported: Boolean(data.docxExported)
+            }
+          }),
+          session
+        });
+        if (!isCurrentSession(session)) return false;
+        if (!response.ok) throw new Error(await responseError(response, "旧草稿迁移失败"));
+        const result = await response.json();
+        if (!isCurrentSession(session)) return false;
+        localStorage.removeItem(draftStorageKey(user));
+        localStorage.setItem(migrationKey, result.project.id);
+        hydrateProject(result.project, result.files);
+        switchMainView("report");
+        showToast("旧草稿已迁移为选题项目");
+        return true;
       } catch (error) {
-        console.warn("无法读取当前用户的本地草稿", error);
+        console.warn("无法迁移当前用户的本地草稿", error);
+        if (isCurrentSession(session)) showToast(error.message || "旧草稿迁移失败，原草稿仍保留");
+        return false;
       }
     }
 
@@ -2689,7 +2870,6 @@
       clearWorkspaceState();
       localStorage.removeItem("phei-model-config");
       currentUser = user;
-      loadUserDraft(user);
       currentUserName.textContent = user.displayName || user.username;
       authView.hidden = true;
       workspace.hidden = false;
@@ -2698,7 +2878,7 @@
       loadBpmCredentialStatus();
       refreshBpmJobs();
       switchMainView("projects");
-      loadProjects();
+      void migrateLegacyDraft(user, captureSession());
       if (window.lucide) window.lucide.createIcons();
     }
 
@@ -2879,9 +3059,18 @@
       document.getElementById("menuBpm").classList.toggle("active", isBpm);
       if (isProjects) loadProjects();
       if (isBpm) {
+        const session = captureSession();
         saveActiveText();
         renderBpmPreview();
-        refreshBpmJobs();
+        refreshBpmJobs(session);
+        if (currentProject) {
+          void saveCurrentProject({ session }).then((saved) => {
+            if (saved && isCurrentSession(session)) return loadProjectPreflight(session);
+            return null;
+          });
+        } else {
+          renderProjectPreflight(null);
+        }
       }
       if (window.lucide) window.lucide.createIcons();
     }
@@ -2898,6 +3087,202 @@
       empty.className = "preview-empty";
       empty.textContent = message;
       return empty;
+    }
+
+    function setProjectSaveState(state) {
+      projectSaveState = state;
+      const labels = {
+        saved: "已保存",
+        saving: "正在保存",
+        dirty: "未保存",
+        conflict: "版本冲突"
+      };
+      projectSaveStatus.textContent = labels[state] || labels.saved;
+      projectSaveStatus.className = `project-save-status ${state === "saved" ? "" : state}`.trim();
+      projectSaveStatus.title = state === "conflict"
+        ? "项目已在其他窗口更新，请重新打开项目后再编辑。"
+        : "选题内容保存在当前用户的项目中";
+    }
+
+    function serializeWorkspaceState() {
+      saveActiveText();
+      bpmTopic = currentBpmTopic();
+      const previousState = currentProject?.state || {};
+      return {
+        sections: sections.map((section) => ({
+          key: section.key,
+          title: section.title,
+          text: String(section.text || ""),
+          confirmed: Boolean(section.confirmed)
+        })),
+        scoreItems: scoreItems.map((item) => [item[0], item[1], Number(item[2] || 0)]),
+        bpmTopic: { ...(bpmTopic || {}) },
+        authorMaintenance: { ...(authorMaintenance || bpmTopic?.authorMaintenance || {}) },
+        fieldSources: { ...(previousState.fieldSources || {}) },
+        sourceFiles: { ...(previousState.sourceFiles || {}) },
+        docxExported: Boolean(docxExported)
+      };
+    }
+
+    async function saveCurrentProject(options) {
+      options = options || {};
+      const checkpointReason = String(options.checkpointReason || "").trim();
+      const session = options.session || captureSession();
+      if (!currentUser || !currentProject || !isCurrentSession(session)) return false;
+      while (projectSaveInFlight && isCurrentSession(session)) {
+        await new Promise((resolve) => window.setTimeout(resolve, 25));
+      }
+      if (!isCurrentSession(session) || !currentProject) return false;
+      if (projectSaveState === "conflict") return false;
+      if (projectSaveState === "saved" && !checkpointReason) return true;
+      const projectId = currentProject.id;
+      const expectedVersion = currentProjectVersion;
+      const payload = {
+        version: expectedVersion,
+        title: currentProject.title || document.getElementById("projectName").textContent,
+        state: serializeWorkspaceState()
+      };
+      if (checkpointReason) payload.revisionReason = checkpointReason;
+      projectSaveInFlight = true;
+      setProjectSaveState("saving");
+      try {
+        const response = await apiFetch(`/api/projects/${projectId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          session
+        });
+        if (!isCurrentSession(session) || currentProject?.id !== projectId) return false;
+        if (response.status === 409) {
+          setProjectSaveState("conflict");
+          showToast("项目已在其他窗口更新，请重新打开后继续编辑");
+          return false;
+        }
+        if (!response.ok) throw new Error(await responseError(response, "项目保存失败"));
+        const data = await response.json();
+        if (!isCurrentSession(session) || currentProject?.id !== projectId) return false;
+        const changedWhileSaving = projectSaveState === "dirty";
+        currentProject = data.project;
+        currentProjectVersion = data.project.version;
+        currentProjectFiles = Array.isArray(data.files) ? data.files : currentProjectFiles;
+        if (!changedWhileSaving) setProjectSaveState("saved");
+        return true;
+      } catch (error) {
+        if (!isCurrentSession(session) || currentProject?.id !== projectId) return false;
+        setProjectSaveState("dirty");
+        showToast(error.message || "项目保存失败");
+        return false;
+      } finally {
+        projectSaveInFlight = false;
+      }
+    }
+
+    function scheduleProjectAutosave() {
+      if (!currentProject) return;
+      setProjectSaveState("dirty");
+      currentProjectPreflight = null;
+      queueBpm.disabled = true;
+      projectPreflightSummary.textContent = "内容已变更，保存后将重新检查";
+      projectPreflightSummary.className = "preflight-summary";
+      window.clearTimeout(projectAutosaveTimer);
+      projectAutosaveTimer = window.setTimeout(saveCurrentProject, 700);
+    }
+
+    function renderProjectPreflight(preflight) {
+      currentProjectPreflight = preflight && typeof preflight === "object" ? preflight : null;
+      if (!currentProjectPreflight) {
+        projectPreflightBody.replaceChildren();
+        projectPreflightSummary.textContent = currentProject ? "正在检查当前项目..." : "请先打开一个选题项目";
+        projectPreflightSummary.className = "preflight-summary";
+        queueBpm.disabled = true;
+        return;
+      }
+      const sourceLabels = {
+        application: "申报表",
+        report: "策划报告",
+        fixed: "系统固定",
+        model: "大模型",
+        user: "用户配置",
+        bpm_profile: "BPM 账号"
+      };
+      const statusLabels = {
+        ready: "已就绪",
+        blocking_missing: "必须补充",
+        optional_missing: "可选缺失"
+      };
+      const rows = (currentProjectPreflight.rows || []).map((item) => {
+        const row = document.createElement("tr");
+        const label = document.createElement("td");
+        const value = document.createElement("td");
+        const source = document.createElement("td");
+        const status = document.createElement("td");
+        label.textContent = String(item.label || item.key || "未命名字段");
+        value.className = "preflight-value";
+        value.textContent = item.value === null || item.value === undefined || item.value === ""
+          ? "未填写"
+          : String(item.value);
+        value.title = value.textContent;
+        source.className = "preflight-source";
+        source.textContent = sourceLabels[item.source] || String(item.source || "未标注");
+        status.className = `preflight-state ${item.status || ""}`;
+        status.textContent = statusLabels[item.status] || String(item.status || "待检查");
+        row.append(label, value, source, status);
+        return row;
+      });
+      projectPreflightBody.replaceChildren(...rows);
+      queueBpm.disabled = !currentProjectPreflight.ready;
+      projectPreflightSummary.textContent = currentProjectPreflight.ready
+        ? `检查通过 · ${currentProjectPreflight.optionalMissingCount || 0} 项可选信息未填写`
+        : `还有 ${currentProjectPreflight.blockingCount || 0} 项必填信息需要处理`;
+      projectPreflightSummary.className = `preflight-summary ${currentProjectPreflight.ready ? "ready" : "blocked"}`;
+    }
+
+    async function loadProjectPreflight(session = captureSession()) {
+      if (!currentProject || !isCurrentSession(session)) {
+        renderProjectPreflight(null);
+        return null;
+      }
+      const projectId = currentProject.id;
+      renderProjectPreflight(null);
+      try {
+        const response = await apiFetch(`/api/projects/${projectId}/preflight`, { cache: "no-store", session });
+        if (!isCurrentSession(session) || currentProject?.id !== projectId) return null;
+        if (!response.ok) throw new Error(await responseError(response, "BPM 填报前检查失败"));
+        const data = await response.json();
+        if (!isCurrentSession(session) || currentProject?.id !== projectId) return null;
+        currentProject = data.project;
+        currentProjectVersion = data.project.version;
+        currentProjectFiles = Array.isArray(data.files) ? data.files : currentProjectFiles;
+        renderProjectPreflight(data.preflight);
+        return data.preflight;
+      } catch (error) {
+        if (!isCurrentSession(session) || currentProject?.id !== projectId) return null;
+        currentProjectPreflight = null;
+        projectPreflightBody.replaceChildren();
+        projectPreflightSummary.textContent = error.message || "BPM 填报前检查失败";
+        projectPreflightSummary.className = "preflight-summary blocked";
+        queueBpm.disabled = true;
+        return null;
+      }
+    }
+
+    async function refreshCurrentProjectSnapshot(session = captureSession()) {
+      if (!currentProject || !isCurrentSession(session)) return false;
+      const projectId = currentProject.id;
+      try {
+        const response = await apiFetch(`/api/projects/${projectId}`, { cache: "no-store", session });
+        if (!isCurrentSession(session) || currentProject?.id !== projectId) return false;
+        if (!response.ok) return false;
+        const data = await response.json();
+        if (!isCurrentSession(session) || currentProject?.id !== projectId) return false;
+        currentProject = data.project;
+        currentProjectVersion = data.project.version;
+        currentProjectFiles = Array.isArray(data.files) ? data.files : currentProjectFiles;
+        setProjectSaveState("saved");
+        return true;
+      } catch (error) {
+        return false;
+      }
     }
 
     function projectStatusLabel(kind, status) {
@@ -3035,6 +3420,8 @@
     }
 
     function hydrateProject(project, files = []) {
+      window.clearTimeout(projectAutosaveTimer);
+      projectAutosaveTimer = null;
       currentProject = project;
       currentProjectVersion = project.version;
       currentProjectFiles = Array.isArray(files) ? files : [];
@@ -3055,6 +3442,8 @@
         ? { ...state.authorMaintenance }
         : bpmTopic?.authorMaintenance || null;
       docxExported = Boolean(state.docxExported);
+      currentProjectPreflight = null;
+      setProjectSaveState("saved");
       uploadedFile = null;
       activeIndex = 0;
       document.getElementById("projectName").textContent = project.title || "未命名选题";
@@ -3066,6 +3455,7 @@
       scoreRows.replaceChildren();
       render();
       renderBpmPreview();
+      renderProjectPreflight(null);
       updateWorkflowByState(docxExported);
       localStorage.setItem(`phei-current-project:${currentUser.id}`, project.id);
     }
@@ -3252,6 +3642,7 @@
           item[2] = Math.max(0, Math.min(item[1], Number(input.value || 0)));
           input.value = item[2];
           updateScoreTotal();
+          scheduleProjectAutosave();
         });
         score.appendChild(input);
         tr.append(name, maximum, score);
@@ -3507,6 +3898,8 @@
         currentProjectVersion = data.project.version;
         currentProjectFiles = Array.isArray(data.files) ? data.files : currentProjectFiles;
         localStorage.setItem(`phei-current-project:${currentUser.id}`, data.project.id);
+        setProjectSaveState("saved");
+        currentProjectPreflight = data.preflight || null;
       }
       if (data.project?.title || data.title) {
         document.getElementById("projectName").textContent = data.project?.title || data.title;
@@ -3686,6 +4079,7 @@
         bpmPassword.value = "";
         setBpmCredentialStatus(status);
         bpmStatus.textContent = "BPM 配置已保存。";
+        if (currentProject && !bpmView.hidden) await loadProjectPreflight(session);
         showToast("BPM 配置已保存");
         closeBpmSettingsDialog();
       } catch (error) {
@@ -3712,6 +4106,7 @@
         bpmPassword.value = "";
         setBpmCredentialStatus(status);
         bpmStatus.textContent = "BPM 配置已清除。";
+        if (currentProject && !bpmView.hidden) await loadProjectPreflight(session);
         showToast("BPM 配置已清除");
       } catch (error) {
         if (!isCurrentSession(session)) return;
@@ -3837,6 +4232,7 @@
       sectionStatus.classList.remove("confirmed");
       updateWordCount();
       updateWorkflowByState();
+      scheduleProjectAutosave();
     });
 
     document.getElementById("indentText").addEventListener("click", () => {
@@ -3845,6 +4241,7 @@
       docxExported = false;
       updateWordCount();
       updateWorkflowByState();
+      scheduleProjectAutosave();
       showToast("已处理首行空两格");
     });
 
@@ -3854,6 +4251,7 @@
       sections[activeIndex].confirmed = true;
       renderEditor();
       updateWorkflowByState();
+      scheduleProjectAutosave();
       showToast("本段已确认");
     });
 
@@ -3865,6 +4263,7 @@
       saveActiveText();
       updateWordCount();
       updateWorkflowByState();
+      scheduleProjectAutosave();
       showToast("已应用润色");
     });
 
@@ -3915,17 +4314,22 @@
       }
     });
 
-    document.getElementById("saveDraft").addEventListener("click", () => {
+    document.getElementById("saveDraft").addEventListener("click", async () => {
       const session = captureSession();
       if (!currentUser || !isCurrentSession(session)) return;
-      saveActiveText();
-      if (!isCurrentSession(session)) return;
-      localStorage.setItem(draftStorageKey(currentUser), JSON.stringify({ sections, scoreItems, bpmTopic, authorMaintenance }));
-      showToast("草稿已保存");
+      if (!currentProject) {
+        showToast("请先新建或打开一个选题项目");
+        return;
+      }
+      window.clearTimeout(projectAutosaveTimer);
+      projectAutosaveTimer = null;
+      const saved = await saveCurrentProject({ checkpointReason: "manual_save", session });
+      if (saved && isCurrentSession(session)) showToast("项目草稿已保存");
     });
 
     document.getElementById("recalcScore").addEventListener("click", () => {
       updateScoreTotal();
+      scheduleProjectAutosave();
       showToast("评分已更新");
     });
 
@@ -3942,6 +4346,10 @@
         showToast("请先新建或打开一个选题项目");
         return;
       }
+	    window.clearTimeout(projectAutosaveTimer);
+	    projectAutosaveTimer = null;
+	    const saved = await saveCurrentProject({ checkpointReason: "before_export", session });
+	    if (!saved || !isCurrentSession(session)) return;
 	    const payload = { projectId: currentProject.id };
       const exportTitle = currentProject.title || document.getElementById("projectName").textContent;
       try {
@@ -3969,6 +4377,8 @@
         document.getElementById("previewImage").hidden = false;
         docxExported = true;
         if (currentProject?.state) currentProject.state.docxExported = true;
+        await refreshCurrentProjectSnapshot(session);
+        if (!isCurrentSession(session)) return;
         updateWorkflowByState(true);
         showToast("DOCX 已生成");
       } catch (error) {
@@ -3981,19 +4391,25 @@
     document.getElementById("queueBpm").addEventListener("click", async () => {
       const session = captureSession();
       if (!isCurrentSession(session)) return;
-      saveActiveText();
-      renderBpmPreview();
-      const unconfirmed = sections.filter((section) => !section.confirmed);
-      if (unconfirmed.length) {
-        showToast(`还有 ${unconfirmed.length} 段未确认`);
+      if (!currentProject) {
+        showToast("请先打开一个选题项目");
         return;
       }
-      const payload = currentBpmPayload();
       if (!bpmCredentialConfigured) {
         guideBpmCredentialSetup();
         return;
       }
-      const title = payload.title;
+      window.clearTimeout(projectAutosaveTimer);
+      projectAutosaveTimer = null;
+      const saved = await saveCurrentProject({ checkpointReason: "before_bpm_topic", session });
+      if (!saved || !isCurrentSession(session)) return;
+      const preflight = await loadProjectPreflight(session);
+      if (!preflight?.ready || !isCurrentSession(session)) {
+        showToast("请先处理 BPM 填报前检查中的必填项");
+        return;
+      }
+      renderBpmPreview();
+      const title = currentProject.title || "未命名选题";
       if (!window.confirm(`确认把《${title}》加入 BPM 暂存队列？后台会按顺序登录 BPM 并创建草稿。`)) return;
 
       const button = document.getElementById("queueBpm");
@@ -4003,7 +4419,7 @@
         const response = await apiFetch("/api/bpm-topic-jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ projectId: currentProject.id }),
           session
         });
         if (!isCurrentSession(session)) return;
@@ -4019,6 +4435,8 @@
         document.getElementById("fileState").textContent = "选题填报已加入队列";
         await refreshBpmJobs(session);
         if (!isCurrentSession(session)) return;
+        await refreshCurrentProjectSnapshot(session);
+        if (!isCurrentSession(session)) return;
         showToast("选题填报已加入队列");
       } catch (error) {
         if (!isCurrentSession(session)) return;
@@ -4027,21 +4445,24 @@
         bpmStatus.textContent = error.message.slice(0, 80) || "选题填报加入队列失败";
         showToast("选题填报加入队列失败");
       } finally {
-        if (isCurrentSession(session)) button.disabled = false;
+        if (isCurrentSession(session)) button.disabled = !currentProjectPreflight?.ready;
       }
     });
 
     document.getElementById("queueAuthor").addEventListener("click", async () => {
       const session = captureSession();
       if (!isCurrentSession(session)) return;
-      saveActiveText();
-      const payload = currentBpmPayload();
+      if (!currentProject) {
+        showToast("请先打开一个选题项目");
+        return;
+      }
+      const topic = currentBpmTopic();
       if (!bpmCredentialConfigured) {
         guideBpmCredentialSetup();
         return;
       }
-      const author = payload.bpmTopic.authorMaintenance || {};
-      const authorName = String(author.name || payload.bpmTopic.authorName || "").trim();
+      const author = topic.authorMaintenance || {};
+      const authorName = String(author.name || topic.authorName || "").trim();
       const authorBio = String(author.bio || "").trim();
       if (!authorName) {
         showToast("没有识别到作者姓名");
@@ -4053,6 +4474,11 @@
       }
       if (!window.confirm(`确认把“${authorName}”新增至 BPM 作译者库？如果该作者已经存在，请取消本次操作。`)) return;
 
+      window.clearTimeout(projectAutosaveTimer);
+      projectAutosaveTimer = null;
+      const saved = await saveCurrentProject({ checkpointReason: "before_bpm_author", session });
+      if (!saved || !isCurrentSession(session)) return;
+
       const button = document.getElementById("queueAuthor");
       button.disabled = true;
       setBpmProgress(40, "正在加入作译者维护队列...", session);
@@ -4060,7 +4486,7 @@
         const response = await apiFetch("/api/bpm-author-jobs", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
+          body: JSON.stringify({ projectId: currentProject.id }),
           session
         });
         if (!isCurrentSession(session)) return;
@@ -4074,6 +4500,8 @@
         finishBpmProgress("作译者维护已加入队列", session);
         bpmStatus.textContent = `作译者维护已加入队列：${result.title || authorName}`;
         await refreshBpmJobs(session);
+        if (!isCurrentSession(session)) return;
+        await refreshCurrentProjectSnapshot(session);
         if (!isCurrentSession(session)) return;
         showToast("作译者维护已加入队列");
       } catch (error) {

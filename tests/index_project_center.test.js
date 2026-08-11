@@ -49,3 +49,38 @@ test('workspace has no built-in medical sample project content', () => {
   assert.doesNotMatch(source, /周丽丽/);
 });
 
+test('project editing serializes and autosaves versioned server state', () => {
+  for (const name of ['serializeWorkspaceState', 'saveCurrentProject', 'scheduleProjectAutosave']) {
+    assert.doesNotThrow(() => functionBody(name));
+  }
+  const saveBody = functionBody('saveCurrentProject');
+  assert.match(saveBody, /method:\s*"PUT"/);
+  assert.match(saveBody, /version:\s*expectedVersion/);
+  assert.match(saveBody, /currentProjectVersion\s*=\s*data\.project\.version/);
+  assert.match(saveBody, /response\.status === 409/);
+  assert.match(saveBody, /setProjectSaveState\("conflict"\)/);
+  assert.match(functionBody('scheduleProjectAutosave'), /setTimeout\([^,]+,\s*700\)/s);
+  assert.match(source, /id="projectSaveStatus"/);
+});
+
+test('legacy browser drafts migrate only after project creation succeeds', () => {
+  const body = functionBody('migrateLegacyDraft');
+  assert.match(body, /localStorage\.getItem\(draftStorageKey\(user\)\)/);
+  assert.match(body, /apiFetch\("\/api\/projects"/);
+  assert.match(body, /if \(!response\.ok\)/);
+  assert.ok(
+    body.indexOf('localStorage.removeItem(draftStorageKey(user))') > body.indexOf('await response.json()'),
+    'legacy draft removal must happen after a successful JSON response'
+  );
+  assert.match(body, /sourceFiles:\s*\{\s*application:\s*\{\s*missing:\s*true/s);
+});
+
+test('BPM view renders project preflight and gates topic queueing', () => {
+  assert.match(source, /id="projectPreflightBody"/);
+  for (const label of ['字段', '内容', '来源', '状态']) {
+    assert.match(source, new RegExp(`<th[^>]*>${label}<\\/th>`));
+  }
+  assert.match(functionBody('loadProjectPreflight'), /`\/api\/projects\/\$\{projectId\}\/preflight`/);
+  assert.match(functionBody('renderProjectPreflight'), /textContent/);
+  assert.match(functionBody('renderProjectPreflight'), /queueBpm\.disabled\s*=\s*!currentProjectPreflight\.ready/);
+});
