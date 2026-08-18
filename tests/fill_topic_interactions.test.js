@@ -71,6 +71,13 @@ test('submitAuthor only maintains authors', () => {
   assert.doesNotMatch(body, /openTopicPopup|fillScoreGrid|fillCostEstimateForm/);
 });
 
+test('author maintenance opens the visible Dojo button instead of same-name hidden fields', () => {
+  const body = functionBody('openAuthorMaintenancePopup');
+  assert.match(body, /getByRole\('button',\s*\{\s*name:\s*'新增作译者',\s*exact:\s*true,?\s*\}\)/);
+  assert.doesNotMatch(body, /input\[value="新增作译者"\]/);
+  assert.match(body, /waitForEvent\('popup',\s*\{\s*timeout:\s*15000\s*\}\)/);
+});
+
 test('CLI exposes isolated topic and author modes', () => {
   assert.match(source, /mode === 'submit-author'/);
   assert.match(source, /mode === 'submit-topic'/);
@@ -307,6 +314,23 @@ test('BPM draft save clicks the visible temporary-save button', () => {
 test('cost estimate reopens the saved draft instead of reusing the post-save frame', () => {
   assert.match(source, /reopenSavedTopicPopup/);
   assert.match(source, /await popup\.close\(\)/);
+});
+
+test('cost estimate calculates and clicks only the top-level temporary-save button', () => {
+  const body = functionBody('saveCostEstimateForm');
+  assert.match(body, /input\[value="计算"\]/);
+  assert.match(body, /input\[name="SAVEB"\]\[value="暂存"\]/);
+  assert.doesNotMatch(body, /button\.x-btn-text\.save|input\[value="保存"\]/);
+});
+
+test('cost estimate success is recorded only after persisted values are verified', () => {
+  const submitBody = functionBody('submitTopic');
+  const saveCall = submitBody.indexOf('saveCostEstimateForm');
+  const verifyCall = submitBody.indexOf('verifyCostEstimateValues');
+  const milestone = submitBody.indexOf("markMilestone('cost_estimate_saved')");
+  assert.ok(saveCall >= 0, 'cost estimate must use its dedicated save helper');
+  assert.ok(verifyCall > saveCall, 'persisted cost values must be verified after save');
+  assert.ok(milestone > verifyCall, 'success milestone must follow persisted-value verification');
 });
 
 test('saved draft lookup rescans all worklist frames until the new list appears', async () => {

@@ -590,16 +590,6 @@ async function fillScoreGrid(frame, topic) {
   await frame.waitForTimeout(1000);
 }
 
-async function clickSaveAndWait(frame, { timeout = 30000, settleMs = 1000 } = {}) {
-  const button = frame.locator(
-    'button.x-btn-text.save:visible, input[name="SAVEB"]:visible, input[value="保存"]:visible, input[value="暂存"]:visible',
-  ).first();
-  await button.waitFor({ state: 'visible', timeout: 10000 });
-  await button.click();
-  await frame.waitForLoadState('domcontentloaded', { timeout }).catch(() => {});
-  await frame.waitForTimeout(settleMs);
-}
-
 async function clickWorkflowSaveAndWait(popup, formFrame, { timeout = 30000, settleMs = 1000 } = {}) {
   const saveButton = popup.locator('input[name="SAVEB"][value="暂存"]').first();
   await saveButton.waitFor({ state: 'visible', timeout: 10000 });
@@ -750,6 +740,65 @@ async function fillCostEstimateForm(costFrame, topic) {
   await setInputValueIfExists(costFrame, 'input[name="GAEXPENSE"]', sales.managementFee);
 }
 
+function numericFieldMatches(actual, expected) {
+  const actualNumber = Number(String(actual ?? '').replace(/,/g, '').trim());
+  const expectedNumber = Number(String(expected ?? '').replace(/,/g, '').trim());
+  if (!Number.isFinite(actualNumber) || !Number.isFinite(expectedNumber)) return false;
+  return Math.abs(actualNumber - expectedNumber) < 0.001;
+}
+
+async function verifyCostEstimateValues(costFrame, topic) {
+  const cost = topic.costDefaults || {};
+  const printing = cost.printing || {};
+  const sales = cost.sales || {};
+  const fields = [
+    ['input[name="BJSTANDARD"]', cost.editUnitPrice, '编加单价'],
+    ['input[name="JDSTANDARD"]', cost.proofUnitPrice, '校对单价'],
+    ['input[name="UNITNUM"]', printing.sheets, '印张'],
+    ['input[name="CYPERCENT"]', sales.storageTransportRate, '储运费扣点'],
+    ['input[name="GAEXPENSE"]', sales.managementFee, '管理费'],
+    ['input[name="SALENUM"]', sales.deliveryCopies, '发货册数'],
+    ['input[name="NETSALENUM"]', sales.saleCopies, '销售册数'],
+    ['input[name="SUMSALENUM"]', sales.totalDeliveryCopies, '总发货册数'],
+    ['input[name="SUMNETSALENUM"]', sales.totalSaleCopies, '总销售册数'],
+  ];
+  const mismatches = [];
+  const values = {};
+
+  for (const [selector, expected, label] of fields) {
+    if (expected === undefined || expected === null || expected === '') continue;
+    const locator = costFrame.locator(selector).first();
+    if (!(await locator.count())) {
+      mismatches.push(`${label}字段不存在`);
+      continue;
+    }
+    const actual = await locator.inputValue().catch(() => '');
+    values[label] = actual;
+    if (!numericFieldMatches(actual, expected)) {
+      mismatches.push(`${label}期望“${expected}”，实际“${actual || '空'}”`);
+    }
+  }
+
+  if (mismatches.length) {
+    throw new Error(`成本估算关键字段校验失败：${mismatches.join('；')}`);
+  }
+  return values;
+}
+
+async function saveCostEstimateForm(costFrame, topic, { timeout = 30000 } = {}) {
+  const calculateButton = costFrame.locator('input[value="计算"]').first();
+  await calculateButton.waitFor({ state: 'visible', timeout: 10000 });
+  await calculateButton.click();
+  await costFrame.waitForTimeout(2000);
+  await verifyCostEstimateValues(costFrame, topic);
+
+  const saveButton = costFrame.locator('input[name="SAVEB"][value="暂存"]').first();
+  await saveButton.waitFor({ state: 'visible', timeout: 10000 });
+  await saveButton.click();
+  await costFrame.waitForLoadState('domcontentloaded', { timeout }).catch(() => {});
+  await costFrame.waitForTimeout(2000);
+}
+
 async function login(page) {
   const user = process.env.BPM_USER;
   const password = process.env.BPM_PASSWORD;
@@ -802,11 +851,12 @@ async function openAuthorMaintenancePopup(page) {
   ));
   if (!listFrame) throw new Error('Author maintenance frame not found');
 
-  const popupPromise = page.waitForEvent('popup', { timeout: 8000 });
-  const addAuthorButton = listFrame.locator(
-    'input[value="新增作译者"], button:has-text("新增作译者")',
-  ).first();
-  await addAuthorButton.waitFor({ state: 'visible', timeout: 10000 });
+  const addAuthorButton = listFrame.getByRole('button', {
+    name: '新增作译者',
+    exact: true,
+  }).first();
+  await addAuthorButton.waitFor({ state: 'visible', timeout: 15000 });
+  const popupPromise = page.waitForEvent('popup', { timeout: 15000 });
   await addAuthorButton.click();
   const popup = await popupPromise;
   await popup.waitForLoadState('domcontentloaded');
@@ -1366,10 +1416,21 @@ async function submitTopic(jsonPath) {
     const costBefore = path.join(outputDir, 'bpm-before-save.png');
     const costAfter = path.join(outputDir, 'bpm-after-save.png');
     await reopened.popup.screenshot({ path: costBefore, fullPage: true });
-    await clickSaveAndWait(costFrame, { timeout: 30000, settleMs: 2000 });
-    markMilestone('cost_estimate_saved');
+    await saveCostEstimateForm(costFrame, topic, { timeout: 30000 });
     await reopened.popup.screenshot({ path: costAfter, fullPage: true });
     await reopened.popup.close().catch(() => {});
+
+    const costVerification = await reopenSavedTopicPopup(page, cno, topic.bookName);
+    const persistedCostFrame = await openCostEstimateForm(
+      costVerification.popup,
+      costVerification.formFrame,
+      topic,
+    );
+    const persistedCostValues = await verifyCostEstimateValues(persistedCostFrame, topic);
+    const costVerified = path.join(outputDir, 'bpm-cost-verified.png');
+    await costVerification.popup.screenshot({ path: costVerified, fullPage: true });
+    await costVerification.popup.close().catch(() => {});
+    markMilestone('cost_estimate_saved');
 
     verification = await verifyCreatedTitle(page, topic.bookName, cno);
     if (!verification.ok) {
@@ -1386,6 +1447,7 @@ async function submitTopic(jsonPath) {
       verification,
       milestones: [...milestones],
       dialogs,
+      costEstimate: persistedCostValues,
       expectedBookName: topic.bookName,
       inputPath: absPath,
       screenshots: [
@@ -1393,6 +1455,7 @@ async function submitTopic(jsonPath) {
         mainAfter,
         costBefore,
         costAfter,
+        costVerified,
       ],
     };
     console.log(JSON.stringify(result, null, 2));
