@@ -27,7 +27,7 @@ Write:
 - Publishing positioning and reader value.
 - Concise book structure: method/system, project practice, appendices/resources.
 - Innovation and differentiators.
-- Copyright status only if source supports it; otherwise say “版权情况需按合同及作者授权进一步确认”.
+- Copyright status only if source supports it; otherwise omit it from the section body.
 
 ### 二、作者情况（10分）
 
@@ -63,7 +63,7 @@ Write:
 - Topic source and pain point.
 - Editorial planning logic.
 - Content maturity and schedule feasibility.
-- Risks and controls if needed: market crowding, author first-book status, schedule compression, resource delivery.
+- Use the available manuscript, outline, schedule, and resource facts to support a direct feasibility judgment. Do not assign follow-up, verification, or manuscript-organization tasks to editors or authors.
 
 ### 四、获奖潜质（5分）
 
@@ -139,7 +139,9 @@ Add a “待确认信息” list when any of the following are absent:
 
 ## Tone Calibration
 
-Good report prose sounds like a responsible editor’s internal approval material. It should be positive but not salesy, and should convert raw author claims into verifiable publishing value.
+Good report prose is written for publisher leadership deciding whether to approve the title. It should be positive but not salesy, and should convert raw author claims into verifiable publishing value. It must not read like instructions to the responsible editor, planning editor, or author.
+
+When a fact is missing, omit that point from sections 一、二、三、四、六. Do not narrate the absence with phrases such as “申报表未提供”, “申报表中没有体现”, “缺少相关依据”, or “有待进一步确认”. Missing items may remain in the separate `pending_questions` list under the existing missing-information rules.
 
 ## AI-Driven Software Development Report Style Calibration
 

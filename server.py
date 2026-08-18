@@ -191,14 +191,31 @@ FIXED_PROFIT_SECTION_TEXT = """　　（一）纸质教材
 　　（7）出版资助：   
 　　（8）预计总毛利润：   """
 
-AI_REPORT_STYLE_GUIDE = """参照《AI驱动软件开发实战》选题策划报告的一到六部分写法，对除第五部分外的内容进行二次润色。风格要求如下：
-1. 一、选题内容：写成3段左右。第1段先判断出版导向、现实命题和出版定位；第2段概括全书规模、篇章结构和主要内容链条；第3段集中写创新点，常用“三方面”结构，并在末尾谨慎说明版权授权/版权风险。
-2. 二、作者情况：写成2段左右。第1段写第一作者身份、职业/教学/科研经历和与选题的相关性；第2段写代表性成果、项目、著作、专利、课程或团队基础。若作者首次出版，要用“虽然……但……”平衡风险和能力。
-3. 三、策划过程与可行性：写成3段左右。第1段从真实教学、行业或课程痛点切入；第2段写策划思路，强调“概念-方法-案例-工具包”或类似闭环；第3段写稿件成熟度、进度、资源素材和按期出版可行性。
-4. 四、获奖潜质：写成2段左右。第1段写教材化、课程化、培训化、数字资源化等延展潜力；第2段写版权输出、数字课程、资源传播或国际交流空间。语气必须谨慎，不承诺获奖。
-5. 六、市场定位与营销：写成4段左右。第1段列出2-4类目标读者；第2段写竞品/同类选题格局和本书差异化；第3段写营销组合，如高校课程推广、作者渠道、技术/教学社区、样章试读、讲座培训等；第4段写配套资源和“图书+资源+服务”的推广方式。
-6. 整体语言要像责任编辑内部上会材料：具体、稳健、有判断，不写空泛套话；每段都要体现“为什么值得出版、内容怎么组织、如何落地推广”。不要照抄范文中的AI软件开发事实，必须替换为当前申报表对应事实。
+AI_REPORT_STYLE_GUIDE = """参照《AI驱动软件开发实战》选题策划报告的一到六部分写法，对除第五部分外的内容进行二次润色。报告供出版社领导审议，目标是以真实事实论证选题的出版价值和实施可行性，帮助领导判断是否批准立项。风格要求如下：
+1. 一、选题内容：写成3段左右。第1段判断出版导向、现实需求和出版定位；第2段概括全书规模、篇章结构和主要内容链条；第3段集中写创新点和差异化价值。版权情况仅在来源有依据时表述，没有依据则直接略去。
+2. 二、作者情况：写成2段左右。第1段写第一作者身份、职业/教学/科研经历和与选题的相关性；第2段写来源明确的代表性成果、项目、著作、专利、课程或团队基础。只论证作者完成本书的能力，不写给责任编辑或作者的工作建议。
+3. 三、策划过程与可行性：写成3段左右。第1段从真实教学、行业或课程痛点切入；第2段写策划思路，强调“概念-方法-案例-工具包”或类似闭环；第3段依据已有稿件、目录、进度和资源素材，直接论证按期出版可行性，不布置组稿、跟进或核实任务。
+4. 四、获奖潜质：写成2段左右。依据已有教材定位、内容创新、课程应用和资源建设基础，客观说明成果培育、资源传播或版权输出潜力；语气谨慎，不承诺获奖。没有具体获奖材料时，不写“缺少获奖依据”等缺项说明。
+5. 六、市场定位与营销：写成4段左右。第1段列出2-4类目标读者；第2段写竞品/同类选题格局和本书差异化；第3段以“本书可通过”“推广将围绕”等策划表述写课程推广、作者渠道、技术/教学社区、样章试读、讲座培训等；第4段写来源支持的配套资源和“图书+资源+服务”价值，不向责任编辑布置操作任务。
+6. 整体语言应具体、稳健、积极、有判断。每段都要回答“为什么值得出版、内容有什么价值、现有基础为什么能够支撑落地”，不得写成风险提示、内部工作安排或审批后的操作建议。
+7. 只写申报表能够支持的事实和合理判断。某项信息缺失时直接略去，不得在一到六正文中写“申报表未提供”“申报表中没有体现”“目前尚不明确”“缺少相关依据”“有待进一步确认”等缺项说明。
+8. 不得出现“建议责任编辑”“建议在组稿阶段”“建议后续跟进”“建议进一步确认”“不建议在论证中强调”“待作者补充后再”等内部工作指令。
+9. 不要照抄范文中的AI软件开发事实，必须替换为当前申报表对应事实。
 """
+
+REPORT_TONE_BANNED_PATTERNS = (
+    r"建议(?:责任编辑|策划编辑|作者)",
+    r"建议(?:在)?组稿(?:阶段)?",
+    r"建议(?:后续|进一步)(?:跟进|确认|核实|补充|完善|商议)",
+    r"不建议.{0,12}(?:强调|写入|表述|宣传)",
+    r"待作者.{0,12}(?:补充|确认|提供|完善)",
+    r"(?:申报表|申报材料|材料)(?:中)?(?:未|没有)(?:提供|体现|说明|列明|明确|填写)?",
+    r"(?:申报表|申报材料|材料)(?:中)?(?:缺少|缺乏)",
+    r"(?:作者|团队|本书|本选题).{0,10}(?:缺少|缺乏)(?:国家级|省部级|明确|具体|相关)?",
+    r"缺少(?:明确|具体|相关)?(?:奖项|依据|材料|信息|记录|支撑|成果|数据|说明)",
+    r"(?:目前|当前)?尚未(?:明确|体现|提供|确认)",
+    r"有待进一步确认",
+)
 
 
 def safe_name(name: str) -> str:
@@ -1458,7 +1475,7 @@ def build_prompt(facts: dict) -> str:
     scoring_rules = read_text(SCORING_RULES)
     source = json.dumps(compact_facts(facts), ensure_ascii=False, indent=2)
     return f"""
-你是电子工业出版社教育出版板块责任编辑助手。请严格依据申报表事实和下方 skill 规则，生成选题策划报告一到六部分、建议评分和待确认信息。
+你是电子工业出版社教育出版板块的资深策划编辑。请严格依据申报表事实和下方 skill 规则，生成供出版社领导审议的选题策划报告一到六部分、建议评分和待确认信息。报告用于论证选题的出版价值和实施可行性，帮助领导判断是否批准立项。
 
 	硬性要求：
 	1. 只输出 JSON，不要输出 Markdown 解释。
@@ -1466,14 +1483,16 @@ def build_prompt(facts: dict) -> str:
 	3. 不得编造定价、版税、包销、资助、毛利润、获奖、版权授权等精确信息；缺失则写入 pending_questions。
 	4. 第五部分“成本与盈利估算”必须使用下方固定文本，不得改写、补充或替换数字：
 	{FIXED_PROFIT_SECTION_TEXT}
-	5. 除第五部分外，一、二、三、四、六必须先依据申报表生成内容，再按下方“范文润色规则”重写成更成熟的上会材料；不要保留流水账、表格腔或申报表原话堆砌。
-	6. BPM 填报分类中，一级分类固定为“教育”，二级分类固定为“本科研究生”，国标分类固定为“G”，层次固定为“高等理工”；你只需要根据选题内容理解，给出最合适的三级分类和四级分类建议，可填 BPM 下拉框文本或代码，不确定则留空。
-	7. 额外生成 BPM 填报专用字段：
+	5. 除第五部分外，一、二、三、四、六必须先依据申报表生成内容，再按下方“范文润色规则”重写成更成熟的领导审议材料；不要保留流水账、表格腔或申报表原话堆砌。
+	6. 一到六正文只写来源能够支持的事实与合理判断。某项信息缺失时，直接略去，不得在正文中写“申报表未提供”“申报表中没有体现”“目前尚不明确”“缺少相关依据”“有待进一步确认”等缺项说明。
+	7. 一到六正文用于论证“为什么值得出版、现有基础为什么能够支撑实施”，不得向责任编辑、策划编辑或作者布置工作，不得出现“建议责任编辑”“建议在组稿阶段”“建议后续跟进”“建议进一步确认”“不建议在论证中强调”“待作者补充后再”等内部工作指令。
+	8. BPM 填报分类中，一级分类固定为“教育”，二级分类固定为“本科研究生”，国标分类固定为“G”，层次固定为“高等理工”；你只需要根据选题内容理解，给出最合适的三级分类和四级分类建议，可填 BPM 下拉框文本或代码，不确定则留空。
+	9. 额外生成 BPM 填报专用字段：
 	   - `bpmFields.feature` 是“选题特色”，按“内容范围、写作特点、实践教学、教学资源建设、其他特点”五项写，每项 1 句，适合直接填入 BPM 文本框。
 	   - `bpmFields.compare` 是“同类选题比较”，如果申报表已有同类选题比较则提炼改写；如果没有，则依据选题定位生成一段谨慎的同类教材/同类选题比较，避免编造具体销量、排名、精确市场数据。
-	8. 额外生成 `authorMaintenance.bio`：如果申报表已有作者简介则提炼为 50-1000 字；如果没有作者简介但 `author_official_search_context` 中有学校/学院/单位官网摘要，则优先依据这些公开摘要和申报表事实写作者简介；如果两者都不足，则只根据申报表中作者单位、职称、学历、研究/教学经历、项目、获奖、著作等已知事实，写一段可用于 BPM 作译者维护的作者简介。不得编造精确头衔、项目名称、获奖名称或联系方式。作者姓名不要从“作者情况”正文推断；如申报表没有独立姓名字段但有“合作者情况简介（姓名、年龄、职称、工作单位等）”，以该栏首位作者姓名为准。
-	9. 评分按保守口径，总分通常控制在 60-70；除非材料非常强，不要超过 70。
-	10. 输出字段必须符合下面 JSON 结构：
+	10. 额外生成 `authorMaintenance.bio`：如果申报表已有作者简介则提炼为 50-1000 字；如果没有作者简介但 `author_official_search_context` 中有学校/学院/单位官网摘要，则优先依据这些公开摘要和申报表事实写作者简介；如果两者都不足，则只根据申报表中作者单位、职称、学历、研究/教学经历、项目、获奖、著作等已知事实，写一段可用于 BPM 作译者维护的作者简介。不得编造精确头衔、项目名称、获奖名称或联系方式。作者姓名不要从“作者情况”正文推断；如申报表没有独立姓名字段但有“合作者情况简介（姓名、年龄、职称、工作单位等）”，以该栏首位作者姓名为准。
+	11. 评分按保守口径，总分通常控制在 60-70；除非材料非常强，不要超过 70。
+	12. 输出字段必须符合下面 JSON 结构：
 {{
   "title": "选题名称",
   "sections": [
@@ -1565,6 +1584,111 @@ def call_complete_report_model(prompt: str) -> dict:
 
 def call_fast_model(prompt: str) -> dict:
     return call_model(prompt, DEFAULT_MODEL_URL, DEFAULT_API_KEY, FAST_MODEL)
+
+
+def find_report_tone_violations(result: dict) -> list[dict]:
+    violations = []
+    sections = result.get("sections") if isinstance(result, dict) else []
+    for section in sections or []:
+        if not isinstance(section, dict) or section.get("key") == "profit":
+            continue
+        text = str(section.get("text", "") or "")
+        matches = []
+        for pattern in REPORT_TONE_BANNED_PATTERNS:
+            matches.extend(match.group(0) for match in re.finditer(pattern, text))
+        matches = list(dict.fromkeys(matches))
+        if matches:
+            violations.append(
+                {
+                    "key": str(section.get("key", "") or ""),
+                    "title": str(section.get("title", "") or ""),
+                    "matches": matches,
+                }
+            )
+    return violations
+
+
+def build_report_tone_rewrite_prompt(facts: dict, result: dict, violations: list[dict]) -> str:
+    violation_keys = {item["key"] for item in violations}
+    sections = [
+        section
+        for section in result.get("sections", [])
+        if isinstance(section, dict) and section.get("key") in violation_keys
+    ]
+    source = json.dumps(compact_facts(facts), ensure_ascii=False, indent=2)
+    section_source = json.dumps(sections, ensure_ascii=False, indent=2)
+    matched = json.dumps(violations, ensure_ascii=False, indent=2)
+    return f"""
+你是电子工业出版社教育出版板块的资深策划编辑。下面部分选题策划报告包含不适合提交领导审议的内部工作指令或缺项说明，请仅重写这些部分。
+
+重写要求：
+1. 报告用于论证选题的出版价值和实施可行性，帮助领导判断是否批准立项。
+2. 保留来源能够支持的事实，将内容写成积极、稳健、有依据的出版价值判断。
+3. 不得增加来源中没有的作者经历、奖项、市场数据、版权合作或资源成果。
+4. 某项信息缺失时直接略去，不得说明“申报表未提供”“申报表中没有体现”“缺少相关依据”或“有待进一步确认”。
+5. 不得向责任编辑、策划编辑或作者布置工作，不得出现“建议责任编辑”“建议在组稿阶段”“建议后续跟进”“不建议强调”或“待作者补充”等指令。
+6. 每个正文段落以两个全角空格开头。只输出严格 JSON，不要解释修改过程。
+7. 仅输出需要重写的 sections，结构如下：
+{{
+  "sections": [
+    {{"key": "原key", "title": "原标题", "text": "重写后的正文"}}
+  ]
+}}
+
+【检测到的问题】
+{matched}
+
+【需要重写的部分】
+{section_source}
+
+【申报表抽取信息】
+{source}
+""".strip()
+
+
+def merge_rewritten_report_sections(result: dict, rewritten: dict, violation_keys: set[str]) -> dict:
+    replacements = {
+        str(section.get("key", "")): section
+        for section in rewritten.get("sections", [])
+        if isinstance(section, dict)
+        and section.get("key") in violation_keys
+        and str(section.get("text", "") or "").strip()
+    }
+    merged = deepcopy(result)
+    for section in merged.get("sections", []):
+        replacement = replacements.get(str(section.get("key", "")))
+        if replacement:
+            section["title"] = replacement.get("title") or section.get("title")
+            section["text"] = replacement["text"]
+    return merged
+
+
+def revise_report_tone_if_needed(facts: dict, result: dict) -> dict:
+    revised = deepcopy(result)
+    for attempt in range(2):
+        violations = find_report_tone_violations(revised)
+        if not violations:
+            return revised
+        runtime_log(
+            "report tone rewrite start "
+            f"attempt={attempt + 1} sections={','.join(item['key'] for item in violations)}"
+        )
+        rewritten = call_complete_report_model(
+            build_report_tone_rewrite_prompt(facts, revised, violations)
+        )
+        revised = merge_rewritten_report_sections(
+            revised,
+            rewritten,
+            {item["key"] for item in violations},
+        )
+    remaining = find_report_tone_violations(revised)
+    if remaining:
+        runtime_log(
+            "report tone rewrite failed "
+            f"sections={','.join(item['key'] for item in remaining)}"
+        )
+        raise ModelServiceError("报告正文仍包含不适合领导审议的表述，请重新生成。")
+    return revised
 
 
 CORE_FIELD_ALIASES = {
@@ -1975,6 +2099,7 @@ def generate_report_from_upload(file_bytes: bytes, filename: str) -> dict:
         facts = recover_missing_structured_fields(facts)
         prompt = build_prompt(facts)
         result = call_complete_report_model(prompt)
+        result = revise_report_tone_if_needed(facts, result)
         normalized = normalize_generated(result)
         normalized["title"] = first_non_empty(
             field_value(facts, "教材名称", "选题名称", "选题名", "书名"),
