@@ -10,8 +10,29 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from docx import Document
+
 import server
 from app_storage import AppStore
+from project_files import ProjectFileStore
+
+
+def author_application_docx_bytes():
+    buffer = io.BytesIO()
+    document = Document()
+    table = document.add_table(rows=5, cols=8)
+    values = [
+        ["姓 名", "王明", "性 别", "男", "职 称", "正高级工程师", "学 历", "博士"],
+        ["身份证", "110101199001011234", "单位名称", "测试大学", "专业", "电气工程", "", ""],
+        ["通信地址", "测试市测试路1号", "邮政编码", "100000", "E-mail", "author@example.com", "", ""],
+        ["电 话", "(O)", "(H)", "(手机) 13800138000", "", "", "", ""],
+        ["个人简历(学习经历和工作经历)", "作者工作简历", "", "", "", "", "", ""],
+    ]
+    for row, row_values in zip(table.rows, values):
+        for cell, value in zip(row.cells, row_values):
+            cell.text = value
+    document.save(buffer)
+    return buffer.getvalue()
 
 
 class ServerAuthHttpTests(unittest.TestCase):
@@ -462,9 +483,11 @@ class ServerJobHttpTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.original_store = server.APP_STORE
+        self.original_file_store = server.PROJECT_FILE_STORE
         self.key = base64.urlsafe_b64encode(os.urandom(32)).decode("ascii")
         self.db_path = Path(self.temp_dir.name) / "app.db"
         server.APP_STORE = AppStore(self.db_path, credential_key=self.key)
+        server.PROJECT_FILE_STORE = ProjectFileStore(Path(self.temp_dir.name) / "projects")
         self.httpd = server.ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
@@ -476,6 +499,7 @@ class ServerJobHttpTests(unittest.TestCase):
         self.thread.join()
         self.httpd.server_close()
         server.APP_STORE = self.original_store
+        server.PROJECT_FILE_STORE = self.original_file_store
         self.temp_dir.cleanup()
 
     def request(self, method, path, payload=None, cookie=None):
@@ -565,6 +589,84 @@ class ServerJobHttpTests(unittest.TestCase):
         self.assertEqual(trusted_payload["bpm"]["user"], "new-account")
         self.assertEqual(trusted_payload["bpm"]["password"], "new-secret")
         self.assertNotIn("password", submit_mock.call_args.args[0]["bpm"])
+
+    def test_author_worker_rehydrates_private_fields_from_the_stored_application(self):
+        user = self.current_user()
+        server.APP_STORE.put_integration_credentials(
+            user["id"], "phei_bpm", "stored-account", "stored-secret"
+        )
+        project = server.APP_STORE.create_project(user["id"], "测试选题")
+        stored = server.PROJECT_FILE_STORE.save_docx(
+            user["id"], project["id"], "application-file", author_application_docx_bytes()
+        )
+        server.APP_STORE.add_project_file(
+            user["id"],
+            project["id"],
+            "application-file",
+            "application",
+            "作者申报表.docx",
+            stored.relative_path,
+            stored.sha256,
+            stored.size_bytes,
+        )
+        job = server.APP_STORE.create_job(
+            user["id"], "author", "王明", {}, project_id=project["id"]
+        )
+        payload = {
+            "projectId": project["id"],
+            "bpmTopic": {
+                "authorName": "王明",
+                "authorMaintenance": {
+                    "name": "王明",
+                    "bio": "保留这段已生成的作者简介",
+                    "gender": "",
+                    "certificateNo": "[已隐藏]",
+                    "phone1": "[已隐藏]",
+                    "email": "　",
+                    "postalCode": "　",
+                    "address": "[已隐藏]",
+                },
+            },
+        }
+        captured = []
+
+        def submit(trusted_payload):
+            captured.append(json.loads(json.dumps(trusted_payload, ensure_ascii=False)))
+            return {
+                "ok": True,
+                "authorName": "王明",
+                "authorCode": "ZYZ20260001",
+                "verified": True,
+            }
+
+        with patch("server.run_bpm_author_submit", side_effect=submit):
+            server.process_bpm_job(job["id"], user["id"], "author", payload)
+
+        author = server.merge_bpm_topic(captured[0])["authorMaintenance"]
+        self.assertEqual(author["bio"], "保留这段已生成的作者简介")
+        self.assertEqual(author["gender"], "男")
+        self.assertEqual(author["certificateNo"], "110101199001011234")
+        self.assertEqual(author["phone1"], "13800138000")
+        self.assertEqual(author["email"], "author@example.com")
+        self.assertEqual(author["postalCode"], "100000")
+        self.assertEqual(author["address"], "测试市测试路1号")
+
+    def test_author_submit_rejects_a_result_without_persisted_list_verification(self):
+        payload = {
+            "bpmTopic": {
+                "authorName": "王明",
+                "authorMaintenance": {
+                    "name": "王明",
+                    "bio": "作者简介",
+                },
+            }
+        }
+        with patch(
+            "server.run_bpm_script",
+            return_value={"ok": True, "authorName": "王明"},
+        ):
+            with self.assertRaisesRegex(server.BpmRunError, "作译者编码|列表验证"):
+                server.run_bpm_author_submit(payload)
 
     def test_topic_job_without_worklist_verification_is_failed(self):
         user = self.current_user()

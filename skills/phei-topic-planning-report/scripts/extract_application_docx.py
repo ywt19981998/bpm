@@ -43,10 +43,28 @@ FIELD_KEY_ALIASES = {
     "电子邮箱": "电子邮箱",
     "邮箱": "邮箱",
     "email": "email",
+    "e-mail": "电子邮箱",
     "邮政编码": "邮政编码",
     "邮编": "邮编",
     "通信地址": "通信地址",
     "通讯地址": "通讯地址",
+    "性别": "性别",
+    "职称": "职称",
+    "职务": "职务",
+    "学历": "学历",
+    "学位": "学位",
+    "专业": "专业",
+    "毕业院校、专业和时间": "毕业院校",
+    "单位名称": "单位名称",
+    "工作单位": "工作单位",
+    "从事方向": "著作方向",
+    "个人简历": "个人简历",
+    "参加的学术组织及任职": "参加的学术组织及任职情况",
+    "参加的学术组织及任职情况": "参加的学术组织及任职情况",
+    "科研或教研项目经历": "科研或教研项目经历",
+    "所承担过的重点科研或教研项目以及在项目中所承担的工作": "科研或教研项目经历",
+    "教学成果获奖情况、作品获奖情况": "获奖情况",
+    "主要著作出版情况": "主要著作出版情况",
 }
 
 KNOWN_FIELD_KEYS = set(FIELD_KEY_ALIASES.values())
@@ -98,6 +116,13 @@ def mask_value(value: str) -> str:
     return "[已隐藏]"
 
 
+def mask_sensitive_patterns(value: str) -> str:
+    text = str(value or "")
+    text = re.sub(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", "[已隐藏]", text)
+    text = re.sub(r"(?<!\d)1[3-9]\d{9}(?!\d)", "[已隐藏]", text)
+    return re.sub(r"(?<!\d)\d{17}[\dXx](?!\d)", "[已隐藏]", text)
+
+
 def extract_table_rows(doc) -> list[dict]:
     rows: list[dict] = []
     for table_index, table in enumerate(doc.tables):
@@ -121,8 +146,14 @@ def mask_table_rows(table_rows: list[dict]) -> list[dict]:
         for index, cell in enumerate(cells):
             if not is_sensitive_key(canonical_key(cell)):
                 continue
-            if index + 1 < len(cells):
-                cells[index + 1] = mask_value(cells[index + 1])
+            next_index = index + 1
+            while next_index < len(cells):
+                next_cell = cells[next_index]
+                next_key = canonical_key(next_cell)
+                if next_key in KNOWN_FIELD_KEYS or is_sensitive_key(next_key):
+                    break
+                cells[next_index] = mask_value(next_cell)
+                next_index += 1
             if re.search(r"[:：]", cell):
                 label = re.split(r"[:：]", cell, maxsplit=1)[0]
                 cells[index] = f"{label}：[已隐藏]"
@@ -137,6 +168,8 @@ def add_field(fields: dict[str, str], key: str, value: str, include_sensitive: b
         return
     if is_sensitive_key(canonical_key(key)) and not include_sensitive:
         value = mask_value(value)
+    elif not include_sensitive:
+        value = mask_sensitive_patterns(value)
     if key in fields and fields[key] != value:
         fields[key] = fields[key] + "\n" + value
     else:
@@ -178,6 +211,23 @@ def extract_field_pairs(table_rows: list[dict], include_sensitive: bool) -> dict
                 continue
             add_field(fields, key, value, include_sensitive)
     return fields
+
+
+def recover_multi_cell_contact_fields(
+    table_rows: list[dict], fields: dict[str, str], include_sensitive: bool
+) -> None:
+    for row in table_rows:
+        cells = list(row.get("cells") or [])
+        if not cells or canonical_key(cells[0]) != "电话":
+            continue
+        mobile = re.search(r"(?<!\d)1[3-9]\d{9}(?!\d)", " ".join(cells[1:]))
+        if not mobile:
+            continue
+        for key in list(fields):
+            if canonical_key(key) == "电话":
+                fields.pop(key, None)
+        fields["电话"] = mobile.group(0) if include_sensitive else mask_value(mobile.group(0))
+        return
 
 
 def extract_paragraphs(doc) -> list[str]:
@@ -235,6 +285,7 @@ def build_payload(path: Path, include_sensitive: bool) -> dict:
     raw_table_rows = extract_table_rows(doc)
     safe_table_rows = mask_table_rows(raw_table_rows)
     fields = extract_field_pairs(raw_table_rows, include_sensitive=include_sensitive)
+    recover_multi_cell_contact_fields(raw_table_rows, fields, include_sensitive)
 
     appendix = {
         "outline_from_paragraphs": extract_heading_section(paragraphs, ["大纲及目录", "大 纲 及 目 录"]),

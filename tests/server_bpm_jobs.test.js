@@ -31,6 +31,7 @@ test('backend invokes isolated Playwright modes', () => {
 });
 
 test('worker dispatches jobs by explicit type', () => {
+  const authorSubmitBody = functionBody('run_bpm_author_submit');
   assert.match(source, /job_type\s*==\s*"author"/);
   assert.match(source, /APP_STORE\.create_job\(\s*user_id,\s*job_type,/s);
   assert.match(source, /update_bpm_job\(job_id,\s*user_id,\s*"succeeded"/);
@@ -40,6 +41,9 @@ test('worker dispatches jobs by explicit type', () => {
       < functionBody('process_bpm_job').indexOf('update_bpm_job(job_id, user_id, "succeeded"'),
     'topic jobs must verify the worklist milestone before being marked succeeded',
   );
+  assert.match(authorSubmitBody, /authorCode/);
+  assert.match(authorSubmitBody, /verified/);
+  assert.match(authorSubmitBody, /is not True/);
 });
 
 test('BPM jobs use authenticated server-side credentials', () => {

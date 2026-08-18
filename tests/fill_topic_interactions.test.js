@@ -18,6 +18,7 @@ const {
   findUniqueBpmPersonLink,
   readLoggedInBpmProfile,
   selectBpmPerson,
+  validateAuthorSaveEvidence,
   waitForSavedTopicLink,
 } = require(scriptPath);
 
@@ -76,6 +77,25 @@ test('author maintenance opens the visible Dojo button instead of same-name hidd
   assert.match(body, /getByRole\('button',\s*\{\s*name:\s*'新增作译者',\s*exact:\s*true,?\s*\}\)/);
   assert.doesNotMatch(body, /input\[value="新增作译者"\]/);
   assert.match(body, /waitForEvent\('popup',\s*\{\s*timeout:\s*15000\s*\}\)/);
+});
+
+test('author maintenance requires BPM save evidence and a persisted list match', () => {
+  assert.throws(
+    () => validateAuthorSaveEvidence(["系统提示:【电子邮件】不允许为空，请输入内容!"], ""),
+    /电子邮件/,
+  );
+  assert.throws(
+    () => validateAuthorSaveEvidence([], ""),
+    /作译者编码/,
+  );
+  assert.deepEqual(
+    validateAuthorSaveEvidence(["作译者添加成功！"], "ZYZ20260001"),
+    { authorCode: "ZYZ20260001" },
+  );
+
+  const body = functionBody('saveAuthorMaintenance');
+  assert.match(body, /validateAuthorSaveEvidence/);
+  assert.match(body, /verifySavedAuthorInList/);
 });
 
 test('CLI exposes isolated topic and author modes', () => {

@@ -137,7 +137,7 @@ Topic results include ordered verification milestones:
 
 If verification fails, inspect screenshots written next to the JSON file and report the blocker.
 
-For the web app queue, do not mark a job completed just because the Node process returned JSON. 选题任务 is successful only when the returned JSON has `ok: true`, a non-empty verified `title`, and the final `worklist_verified` milestone. 作译者任务 is successful only when the returned JSON has `ok: true` and a non-empty `authorName`. If the required result is missing, mark that job failed. Preserve completed milestones even on failure, together with the run's `topic.json`, stdout/stderr, and screenshots under the web app's `output/bpm-runs/` directory for diagnosis.
+For the web app queue, do not mark a job completed just because the Node process returned JSON. 选题任务 is successful only when the returned JSON has `ok: true`, a non-empty verified `title`, and the final `worklist_verified` milestone. 作译者任务 is successful only when the returned JSON has `ok: true`, a non-empty `authorName`, a non-empty BPM-generated `authorCode`, and `verified: true` after querying the BPM author list by exact name and code. If the required result is missing, mark that job failed. Preserve completed milestones even on failure, together with the run's `topic.json`, stdout/stderr, and screenshots under the web app's `output/bpm-runs/` directory for diagnosis.
 
 ## Safety
 

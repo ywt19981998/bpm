@@ -69,6 +69,34 @@ class ExtractApplicationDocxTests(unittest.TestCase):
         self.assertNotIn("private@example.com", serialized)
         self.assertIn("[已隐藏]", serialized)
 
+    def test_private_payload_canonicalizes_author_identity_and_contact_fields(self):
+        document = Document()
+        table = document.add_table(rows=4, cols=8)
+        values = [
+            ["姓 名", "王明", "性 别", "男", "职 称", "正高级工程师", "学 历", "博士"],
+            ["邮政编码", "100000", "E-mail", "author@example.com", "", "", "", ""],
+            ["电 话", "(O)", "(H)", "(手机) 13800138000", "", "", "", ""],
+            ["个人简历(学习经历和工作经历)", "作者工作简历", "", "", "", "", "", ""],
+        ]
+        for row, row_values in zip(table.rows, values):
+            for cell, value in zip(row.cells, row_values):
+                cell.text = value
+
+        with tempfile.NamedTemporaryFile(suffix=".docx") as tmp:
+            document.save(tmp.name)
+            payload = extractor.build_payload(Path(tmp.name), include_sensitive=True)
+            safe_payload = extractor.build_payload(Path(tmp.name), include_sensitive=False)
+
+        fields = payload["canonical_fields"]
+        self.assertEqual(fields["姓名"], "王明")
+        self.assertEqual(fields["性别"], "男")
+        self.assertEqual(fields["职称"], "正高级工程师")
+        self.assertEqual(fields["学历"], "博士")
+        self.assertEqual(fields["电子邮箱"], "author@example.com")
+        self.assertEqual(fields["电话"], "13800138000")
+        self.assertEqual(fields["个人简历"], "作者工作简历")
+        self.assertNotIn("13800138000", json.dumps(safe_payload, ensure_ascii=False))
+
 
 if __name__ == "__main__":
     unittest.main()

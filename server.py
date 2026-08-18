@@ -802,16 +802,16 @@ def build_author_maintenance(facts: dict, result: dict, editor_name: str = "叶�
         "graduateSchool": blank_if_missing(author_field(facts, "毕业院校", "毕业学校")),
         "workUnit": blank_if_missing(work_unit),
         "unitAddress": blank_if_missing(author_field(facts, "单位地址")),
-        "unitZip": blank_if_missing(author_field(facts, "单位邮编", "邮编")),
+        "unitZip": blank_if_missing(author_field(facts, "单位邮编", "邮编", "邮政编码")),
         "unitContactor": blank_if_missing(author_field(facts, "单位联系人")),
         "unitFax": blank_if_missing(author_field(facts, "单位传真")),
         "phone1": blank_if_missing(author_field(facts, "联系电话", "联系电话1", "手机", "电话")),
         "phone2": blank_if_missing(author_field(facts, "联系电话2")),
         "fax": blank_if_missing(author_field(facts, "传真")),
         "email": blank_if_missing(author_field(facts, "电子邮箱", "邮箱", "电子邮件")),
-        "postalCode": blank_if_missing(author_field(facts, "邮编")),
+        "postalCode": blank_if_missing(author_field(facts, "邮编", "邮政编码")),
         "address": blank_if_missing(author_field(facts, "通信地址", "通讯地址", "联系地址")),
-        "workResume": blank_if_missing(author_field(facts, "工作简历或单位简介", "工作简历", "个人简介")),
+        "workResume": blank_if_missing(author_field(facts, "工作简历或单位简介", "工作简历", "个人简历", "个人简介")),
         "academicOrganizations": blank_if_missing(author_field(facts, "参加的学术组织及任职情况", "学术或教育组织任职")),
         "researchProjects": blank_if_missing(author_field(facts, "科研或教研项目经历", "项目经历", "教研项目")),
         "awards": blank_if_missing(author_field(facts, "科研或教学工作及获奖情况", "获奖情况", "教学获奖")),
@@ -820,6 +820,59 @@ def build_author_maintenance(facts: dict, result: dict, editor_name: str = "叶�
         "bio": bio,
         "bioStatus": bio_status,
     }
+
+
+def substantive_author_value(value) -> bool:
+    text = strip_indent(str(value or ""))
+    return bool(text and text not in {"[已隐藏]", "[REDACTED]"})
+
+
+def merge_private_author_maintenance(current: dict, extracted: dict) -> dict:
+    merged = dict(current or {})
+    for key, value in (extracted or {}).items():
+        if key in {"bio", "bioStatus"} and substantive_author_value(merged.get(key)):
+            continue
+        if substantive_author_value(value) and not substantive_author_value(merged.get(key)):
+            merged[key] = value
+    return merged
+
+
+def hydrate_author_payload_from_project_application(
+    payload: dict, user_id: int, project_id: str
+) -> dict:
+    application_files = [
+        item
+        for item in APP_STORE.list_project_files(user_id, project_id)
+        if item.get("kind") == "application"
+    ]
+    if not application_files:
+        return payload
+
+    application_path = PROJECT_FILE_STORE.resolve(application_files[0]["storagePath"])
+    facts = load_extractor().build_payload(application_path, include_sensitive=True)
+    hydrated = deepcopy(payload)
+    topic = merge_bpm_topic(hydrated)
+    current = topic.get("authorMaintenance") if isinstance(topic.get("authorMaintenance"), dict) else {}
+    extracted = build_author_maintenance(
+        facts,
+        {"authorMaintenance": current},
+        editor_name_from_payload(hydrated),
+    )
+    author = merge_private_author_maintenance(current, extracted)
+    author["enabled"] = True
+
+    gender = strip_indent(str(author.get("gender", "")))
+    email = strip_indent(str(author.get("email", "")))
+    if gender not in {"男", "女"}:
+        raise ValueError("原始选题申报表缺少有效作者性别，不能新增 BPM 作译者。")
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise ValueError("原始选题申报表缺少合法电子邮箱，不能新增 BPM 作译者。")
+
+    topic["authorMaintenance"] = author
+    topic["authorName"] = first_non_empty(topic.get("authorName", ""), author.get("name", ""))
+    hydrated["bpmTopic"] = topic
+    hydrated["authorMaintenance"] = author
+    return hydrated
 
 
 def report_scores(result_or_payload: dict) -> dict:
@@ -1028,7 +1081,13 @@ def run_bpm_author_submit(payload: dict) -> dict:
     topic["authorMaintenance"] = author
     author_payload = deepcopy(payload)
     author_payload["bpmTopic"] = topic
-    return run_bpm_script(author_payload, "submit-author", "BPM 作译者保存")
+    result = run_bpm_script(author_payload, "submit-author", "BPM 作译者保存")
+    if not result.get("authorCode") or result.get("verified") is not True:
+        raise BpmRunError(
+            "BPM 作译者保存缺少作译者编码或列表验证，不能标记为成功。",
+            result=result,
+        )
+    return result
 
 
 def run_bpm_submit(payload: dict) -> dict:
@@ -1294,6 +1353,10 @@ def process_bpm_job(job_id: str, user_id: int, job_type: str, payload: dict):
         if not user:
             raise ValueError("当前用户不存在，不能执行 BPM 任务。")
         trusted_payload, credentials = trusted_bpm_payload(payload, user)
+        if job_type == "author" and project_id:
+            trusted_payload = hydrate_author_payload_from_project_application(
+                trusted_payload, user_id, project_id
+            )
         password = credentials.get("password", "")
         append_bpm_job_log(job_id, user_id, f"开始登录 BPM 并执行{job_label}")
         result = (

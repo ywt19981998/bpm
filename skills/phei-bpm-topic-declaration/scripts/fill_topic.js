@@ -905,6 +905,61 @@ async function fillAuthorMaintenanceForm(formFrame, topic) {
   await setInputValueIfExists(formFrame, 'textarea[name="AUTHORBRIEF"]', author.bio || '　');
 }
 
+function validateAuthorSaveEvidence(dialogs, authorCode) {
+  const messages = (dialogs || []).map((message) => String(message || '').trim()).filter(Boolean);
+  const blockingMessage = messages.find((message) => (
+    /不允许为空|不是一个合法|已添加|失败|错误/.test(message)
+    && !/作译者添加成功/.test(message)
+  ));
+  if (blockingMessage) {
+    throw new Error(`BPM 作译者保存被校验拦截：${blockingMessage}`);
+  }
+  const code = String(authorCode || '').trim();
+  if (!code || code === 'error') {
+    throw new Error('BPM 作译者保存后没有生成作译者编码');
+  }
+  if (!messages.some((message) => /作译者添加成功/.test(message))) {
+    throw new Error(`BPM 未返回“作译者添加成功”确认${messages.length ? `：${messages.join('；')}` : ''}`);
+  }
+  return { authorCode: code };
+}
+
+async function verifySavedAuthorInList(page, authorName, authorCode, { timeout = 30000 } = {}) {
+  let listFrame = null;
+  for (const frame of page.frames()) {
+    if (await frame.locator('input[name^="AUTHORNAME"]:visible').count().catch(() => 0)) {
+      listFrame = frame;
+      break;
+    }
+  }
+  if (!listFrame) throw new Error('BPM 作译者列表页未找到，无法验证保存结果');
+
+  const nameInput = listFrame.locator('input[name^="AUTHORNAME"]:visible').first();
+  const codeInput = listFrame.locator('input[name^="AUTHORCODE"]:visible').first();
+  await nameInput.fill(authorName);
+  if (await codeInput.count()) await codeInput.fill(authorCode);
+  const queryButton = listFrame.getByRole('button', { name: '查询', exact: true }).first();
+  await queryButton.waitFor({ state: 'visible', timeout: 10000 });
+  await queryButton.click();
+
+  const deadline = Date.now() + timeout;
+  let lastText = '';
+  while (Date.now() <= deadline) {
+    for (const frame of page.frames()) {
+      const bodyText = await frame.locator('body').innerText().catch(() => '');
+      if (!bodyText) continue;
+      if (bodyText.includes(authorName) && bodyText.includes(authorCode)) {
+        return { ok: true, authorName, authorCode };
+      }
+      if (bodyText.includes('作者姓名或单位名称')) lastText = bodyText.slice(0, 3000);
+    }
+    await page.waitForTimeout(500);
+  }
+  throw new Error(
+    `BPM 作译者保存未通过列表验证：未找到“${authorName} / ${authorCode}”${lastText ? `；列表内容：${lastText}` : ''}`,
+  );
+}
+
 async function saveAuthorMaintenance(page, topic, outputDir, { dryRun = false } = {}) {
   const author = topic.authorMaintenance || {};
   if (!author.enabled || !(author.name || topic.authorName)) {
@@ -918,12 +973,42 @@ async function saveAuthorMaintenance(page, topic, outputDir, { dryRun = false } 
     await popup.close().catch(() => {});
     return { skipped: false, dryRun: true, authorName: author.name || topic.authorName, screenshot };
   }
+  const dialogs = [];
+  popup.on('dialog', async (dialog) => {
+    dialogs.push(dialog.message());
+    await dialog.accept().catch(() => {});
+  });
+  const authorCodeResponsePromise = popup.waitForResponse(
+    (response) => response.url().includes('PHEI_GXR_AUTHOR_FORMBEFORESAVE'),
+    { timeout: 15000 },
+  ).catch(() => null);
   await popup.locator('input[name="SAVEB"]').click();
-  await popup.waitForTimeout(3000);
+  const authorCodeResponse = await authorCodeResponsePromise;
+  const responseAuthorCode = authorCodeResponse
+    ? String(await authorCodeResponse.text().catch(() => '')).trim()
+    : '';
+  await page.waitForTimeout(500);
+  const formAuthorCode = popup.isClosed()
+    ? ''
+    : await formFrame.locator('input[name="AUTHORCODE"]').inputValue().catch(() => '');
+  const evidence = validateAuthorSaveEvidence(dialogs, responseAuthorCode || formAuthorCode);
+  await page.waitForTimeout(2000);
+  const verification = await verifySavedAuthorInList(
+    page,
+    author.name || topic.authorName,
+    evidence.authorCode,
+  );
   const after = path.join(outputDir, 'bpm-author-after-save.png');
-  await popup.screenshot({ path: after, fullPage: true });
+  await page.screenshot({ path: after, fullPage: true });
   await popup.close().catch(() => {});
-  return { skipped: false, authorName: author.name || topic.authorName, screenshots: [screenshot, after] };
+  return {
+    skipped: false,
+    authorName: author.name || topic.authorName,
+    authorCode: evidence.authorCode,
+    verified: verification.ok,
+    dialogs,
+    screenshots: [screenshot, after],
+  };
 }
 
 async function openTopicPopup(page) {
@@ -1503,6 +1588,8 @@ async function submitAuthor(jsonPath) {
       ok: true,
       mode: 'submit-author',
       authorName,
+      authorCode: authorResult.authorCode,
+      verified: authorResult.verified === true,
       authorResult,
       inputPath: absPath,
     }, null, 2));
@@ -1612,6 +1699,7 @@ module.exports = {
   findUniqueBpmPersonLink,
   readLoggedInBpmProfile,
   selectBpmPerson,
+  validateAuthorSaveEvidence,
   waitForSavedTopicLink,
 };
 
