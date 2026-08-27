@@ -273,6 +273,18 @@ class AppStore:
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (5, int(time.time())),
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mail_template_default_initializations (
+                    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    initialized_at INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (6, int(time.time())),
+            )
 
     @staticmethod
     def _normalize_username(username: str) -> str:
@@ -411,12 +423,21 @@ class AppStore:
         return name.strip(), subject, body
 
     @staticmethod
-    def _mail_template_from_row(row: sqlite3.Row) -> dict:
+    def _format_mail_template_timestamp(value: int | None) -> str | None:
+        if value is None:
+            return None
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(value))
+
+    @classmethod
+    def _mail_template_from_row(cls, row: sqlite3.Row) -> dict:
         return {
             "id": row["id"],
             "name": row["name"],
             "subject": row["subject"],
             "body": row["body"],
+            "createdAt": cls._format_mail_template_timestamp(row["created_at"]),
+            "updatedAt": cls._format_mail_template_timestamp(row["updated_at"]),
+            "lastUsedAt": cls._format_mail_template_timestamp(row["last_used_at"]),
         }
 
     def create_mail_template(self, user_id: int, name: str, subject: str, body: str) -> dict:
@@ -432,15 +453,23 @@ class AppStore:
                     """,
                     (template_id, user_id, name, subject, body, now, now),
                 )
+                row = connection.execute(
+                    """
+                    SELECT id, name, subject, body, created_at, updated_at, last_used_at
+                    FROM mail_templates
+                    WHERE id = ? AND user_id = ?
+                    """,
+                    (template_id, user_id),
+                ).fetchone()
         except sqlite3.IntegrityError as error:
             raise ValueError("mail template could not be created") from error
-        return {"id": template_id, "name": name, "subject": subject, "body": body}
+        return self._mail_template_from_row(row)
 
     def list_mail_templates(self, user_id: int) -> list[dict]:
         with self.connect() as connection:
             rows = connection.execute(
                 """
-                SELECT id, name, subject, body
+                SELECT id, name, subject, body, created_at, updated_at, last_used_at
                 FROM mail_templates
                 WHERE user_id = ?
                 ORDER BY created_at ASC, rowid ASC
@@ -466,7 +495,7 @@ class AppStore:
                 return None
             row = connection.execute(
                 """
-                SELECT id, name, subject, body
+                SELECT id, name, subject, body, created_at, updated_at, last_used_at
                 FROM mail_templates
                 WHERE id = ? AND user_id = ?
                 """,
@@ -482,6 +511,28 @@ class AppStore:
             )
         return cursor.rowcount > 0
 
+    def touch_mail_template(self, user_id: int, template_id: str) -> dict | None:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE mail_templates
+                SET last_used_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (int(time.time()), template_id, user_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = connection.execute(
+                """
+                SELECT id, name, subject, body, created_at, updated_at, last_used_at
+                FROM mail_templates
+                WHERE id = ? AND user_id = ?
+                """,
+                (template_id, user_id),
+            ).fetchone()
+        return self._mail_template_from_row(row)
+
     def ensure_default_mail_templates(self, user_id: int, defaults: list[dict]) -> list[dict]:
         templates = []
         for default in defaults:
@@ -495,10 +546,17 @@ class AppStore:
         now = int(time.time())
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            initialization = connection.execute(
+                """
+                INSERT OR IGNORE INTO mail_template_default_initializations(user_id, initialized_at)
+                VALUES (?, ?)
+                """,
+                (user_id, now),
+            )
             existing_count = connection.execute(
                 "SELECT COUNT(*) FROM mail_templates WHERE user_id = ?", (user_id,)
             ).fetchone()[0]
-            if existing_count == 0:
+            if initialization.rowcount and existing_count == 0:
                 connection.executemany(
                     """
                     INSERT INTO mail_templates(id, user_id, name, subject, body, created_at, updated_at)

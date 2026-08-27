@@ -24,8 +24,17 @@ class MailTemplateStorageTests(unittest.TestCase):
         created = self.store.create_mail_template(
             self.user_id, "教材主编邀请", "主题 {{姓名}}", "{{姓名}}老师，您好"
         )
+        self.assertEqual(
+            set(created),
+            {"id", "name", "subject", "body", "createdAt", "updatedAt", "lastUsedAt"},
+        )
+        self.assertIsInstance(created["createdAt"], str)
+        self.assertIsInstance(created["updatedAt"], str)
+        self.assertIsNone(created["lastUsedAt"])
 
-        self.assertEqual(len(self.store.list_mail_templates(self.user_id)), 1)
+        templates = self.store.list_mail_templates(self.user_id)
+        self.assertEqual(len(templates), 1)
+        self.assertEqual(templates[0], created)
         self.assertEqual(self.store.list_mail_templates(self.other_user_id), [])
 
         updated = self.store.update_mail_template(
@@ -34,6 +43,9 @@ class MailTemplateStorageTests(unittest.TestCase):
         self.assertEqual(updated["name"], "主编邀请")
         self.assertEqual(updated["subject"], "新主题")
         self.assertEqual(updated["body"], "新正文")
+        self.assertIsInstance(updated["createdAt"], str)
+        self.assertIsInstance(updated["updatedAt"], str)
+        self.assertIsNone(updated["lastUsedAt"])
         self.assertIsNone(
             self.store.update_mail_template(
                 self.other_user_id, created["id"], "越权", "越权", "越权"
@@ -56,6 +68,35 @@ class MailTemplateStorageTests(unittest.TestCase):
         self.assertEqual([template["name"] for template in second], ["邀请", "提醒"])
         self.assertEqual(len(self.store.list_mail_templates(self.user_id)), 2)
         self.assertEqual(self.store.list_mail_templates(self.other_user_id), [])
+
+        for template in first:
+            self.assertTrue(self.store.delete_mail_template(self.user_id, template["id"]))
+        self.assertEqual(self.store.list_mail_templates(self.user_id), [])
+        self.assertEqual(self.store.ensure_default_mail_templates(self.user_id, defaults), [])
+
+    def test_touch_mail_template_is_user_scoped_and_updates_last_used_at(self):
+        template = self.store.create_mail_template(
+            self.user_id, "教材主编邀请", "主题 {{姓名}}", "{{姓名}}老师，您好"
+        )
+
+        self.assertIsNone(
+            self.store.touch_mail_template(self.other_user_id, template["id"])
+        )
+        touched = self.store.touch_mail_template(self.user_id, template["id"])
+
+        self.assertEqual(touched["id"], template["id"])
+        self.assertIsInstance(touched["lastUsedAt"], str)
+        self.assertEqual(self.store.list_mail_templates(self.user_id), [touched])
+
+    def test_default_templates_do_not_mix_with_existing_user_templates(self):
+        created = self.store.create_mail_template(
+            self.user_id, "自建模板", "自建主题", "自建正文"
+        )
+        defaults = [{"name": "邀请", "subject": "邀请 {{姓名}}", "body": "您好"}]
+
+        self.assertEqual(
+            self.store.ensure_default_mail_templates(self.user_id, defaults), [created]
+        )
 
     def test_mail_draft_persists_across_reopen_and_is_user_scoped(self):
         template = self.store.create_mail_template(
