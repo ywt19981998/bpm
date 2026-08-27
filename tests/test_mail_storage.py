@@ -120,5 +120,131 @@ class MailTemplateStorageTests(unittest.TestCase):
         self.assertIsNone(reopened.get_mail_draft(self.other_user_id))
 
 
+class MailBatchStorageTests(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "app.db"
+        self.store = AppStore(self.db_path)
+        self.user_id = self.store.register_user(
+            "editor01", "S3cure-pass", "张编辑"
+        )["id"]
+        self.other_user_id = self.store.register_user(
+            "editor02", "S3cure-pass", "李编辑"
+        )["id"]
+
+    def tearDown(self):
+        self.temp_dir.cleanup()
+
+    @staticmethod
+    def _deliveries():
+        return [
+            {
+                "name": "张三",
+                "email": "a@example.com",
+                "subject": "合作邀请",
+                "body": "张三老师，您好",
+            },
+            {
+                "name": "李四",
+                "email": "b@example.com",
+                "subject": "合作邀请",
+                "body": "李四老师，您好",
+            },
+        ]
+
+    def test_batch_rolls_up_partial_failure(self):
+        batch = self.store.create_mail_batch(
+            self.user_id,
+            "合作邀请",
+            "{{姓名}}老师，您好",
+            self._deliveries(),
+        )
+        first, second = batch["deliveries"]
+        self.store.update_mail_delivery(self.user_id, batch["id"], first["id"], "succeeded")
+        self.store.update_mail_delivery(
+            self.user_id, batch["id"], second["id"], "failed", "连接中断"
+        )
+
+        finished = self.store.finish_mail_batch(self.user_id, batch["id"])
+
+        self.assertEqual(finished["status"], "partial_failed")
+        self.assertEqual(finished["totalCount"], 2)
+        self.assertEqual(finished["sentCount"], 1)
+        self.assertEqual(finished["failedCount"], 1)
+        self.assertEqual(finished["deliveries"][1]["errorSummary"], "连接中断")
+
+    def test_batch_is_user_scoped_and_lists_newest_first(self):
+        first = self.store.create_mail_batch(
+            self.user_id, "第一封", "正文", self._deliveries()[:1]
+        )
+        second = self.store.create_mail_batch(
+            self.user_id, "第二封", "正文", self._deliveries()[1:]
+        )
+
+        self.assertIsNone(self.store.get_mail_batch(self.other_user_id, first["id"]))
+        self.assertEqual(self.store.list_mail_batches(self.other_user_id), [])
+        self.assertEqual(
+            [batch["id"] for batch in self.store.list_mail_batches(self.user_id)],
+            [second["id"], first["id"]],
+        )
+        self.assertEqual(self.store.list_mail_batches(self.user_id, limit=1), [
+            self.store.get_mail_batch(self.user_id, second["id"])
+        ])
+
+    def test_retry_copies_only_failed_deliveries(self):
+        original = self.store.create_mail_batch(
+            self.user_id, "合作邀请", "{{姓名}}老师，您好", self._deliveries()
+        )
+        succeeded, failed = original["deliveries"]
+        self.store.update_mail_delivery(
+            self.user_id, original["id"], succeeded["id"], "succeeded"
+        )
+        self.store.update_mail_delivery(
+            self.user_id, original["id"], failed["id"], "failed", "连接中断"
+        )
+        self.store.finish_mail_batch(self.user_id, original["id"])
+
+        retry = self.store.create_retry_mail_batch(self.user_id, original["id"])
+
+        self.assertNotEqual(retry["id"], original["id"])
+        self.assertEqual(retry["status"], "queued")
+        self.assertEqual(retry["totalCount"], 1)
+        self.assertEqual(retry["deliveries"][0]["name"], "李四")
+        self.assertEqual(retry["deliveries"][0]["email"], "b@example.com")
+        self.assertEqual(retry["deliveries"][0]["status"], "queued")
+        self.assertEqual(retry["deliveries"][0]["errorSummary"], None)
+        self.assertEqual(
+            self.store.get_mail_batch(self.user_id, original["id"])["status"],
+            "partial_failed",
+        )
+
+    def test_retry_requires_a_failed_delivery(self):
+        batch = self.store.create_mail_batch(
+            self.user_id, "合作邀请", "正文", self._deliveries()[:1]
+        )
+
+        with self.assertRaisesRegex(ValueError, "没有可重试的失败邮件"):
+            self.store.create_retry_mail_batch(self.user_id, batch["id"])
+
+    def test_start_and_delivery_status_are_user_scoped(self):
+        batch = self.store.create_mail_batch(
+            self.user_id, "合作邀请", "正文", self._deliveries()[:1]
+        )
+
+        self.assertIsNone(self.store.start_mail_batch(self.other_user_id, batch["id"]))
+        self.assertIsNone(
+            self.store.update_mail_delivery(
+                self.other_user_id, batch["id"], batch["deliveries"][0]["id"], "sending"
+            )
+        )
+        started = self.store.start_mail_batch(self.user_id, batch["id"])
+        self.assertEqual(started["status"], "running")
+        self.store.update_mail_delivery(
+            self.user_id, batch["id"], batch["deliveries"][0]["id"], "succeeded"
+        )
+        finished = self.store.finish_mail_batch(self.user_id, batch["id"])
+        self.assertEqual(finished["status"], "succeeded")
+
+
 if __name__ == "__main__":
     unittest.main()

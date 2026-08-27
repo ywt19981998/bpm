@@ -285,6 +285,52 @@ class AppStore:
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (6, int(time.time())),
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mail_batches (
+                    id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    subject_template TEXT NOT NULL,
+                    body_template TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'succeeded', 'partial_failed', 'failed')),
+                    total_count INTEGER NOT NULL,
+                    sent_count INTEGER NOT NULL DEFAULT 0,
+                    failed_count INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    started_at INTEGER,
+                    finished_at INTEGER,
+                    updated_at INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mail_deliveries (
+                    id TEXT PRIMARY KEY,
+                    batch_id TEXT NOT NULL REFERENCES mail_batches(id) ON DELETE CASCADE,
+                    recipient_name TEXT NOT NULL,
+                    recipient_email TEXT NOT NULL,
+                    rendered_subject TEXT NOT NULL,
+                    rendered_body TEXT NOT NULL,
+                    status TEXT NOT NULL CHECK(status IN ('queued', 'sending', 'succeeded', 'failed')),
+                    error_summary TEXT,
+                    sent_at INTEGER,
+                    updated_at INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mail_batches_user_created "
+                "ON mail_batches(user_id, created_at DESC)"
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_mail_deliveries_batch "
+                "ON mail_deliveries(batch_id)"
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (7, int(time.time())),
+            )
 
     @staticmethod
     def _normalize_username(username: str) -> str:
@@ -631,6 +677,273 @@ class AppStore:
                 """,
                 (user_id, template_id, subject, body, recipients_json, int(time.time())),
             )
+
+    @staticmethod
+    def _format_mail_batch_timestamp(value: int | None) -> str | None:
+        if value is None:
+            return None
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(value / 1000))
+
+    @staticmethod
+    def _validate_mail_batch_content(
+        subject: str, body: str, deliveries: list[dict]
+    ) -> tuple[str, str, list[dict]]:
+        if not isinstance(subject, str) or not isinstance(body, str):
+            raise ValueError("mail batch subject and body must be strings")
+        if not isinstance(deliveries, list) or not deliveries:
+            raise ValueError("mail batch deliveries must be a non-empty list")
+        normalized = []
+        for delivery in deliveries:
+            if not isinstance(delivery, dict):
+                raise ValueError("mail delivery must be an object")
+            fields = {
+                "name": delivery.get("name"),
+                "email": delivery.get("email"),
+                "subject": delivery.get("subject"),
+                "body": delivery.get("body"),
+            }
+            if any(not isinstance(value, str) or not value.strip() for value in fields.values()):
+                raise ValueError("mail delivery requires non-empty name, email, subject and body")
+            normalized.append({key: value.strip() for key, value in fields.items()})
+        return subject, body, normalized
+
+    @classmethod
+    def _mail_delivery_from_row(cls, row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "name": row["recipient_name"],
+            "email": row["recipient_email"],
+            "subject": row["rendered_subject"],
+            "body": row["rendered_body"],
+            "status": row["status"],
+            "errorSummary": row["error_summary"],
+            "sentAt": cls._format_mail_batch_timestamp(row["sent_at"]),
+            "updatedAt": cls._format_mail_batch_timestamp(row["updated_at"]),
+        }
+
+    @classmethod
+    def _mail_batch_from_row(cls, row: sqlite3.Row, deliveries: list[dict]) -> dict:
+        return {
+            "id": row["id"],
+            "subject": row["subject_template"],
+            "body": row["body_template"],
+            "status": row["status"],
+            "totalCount": row["total_count"],
+            "sentCount": row["sent_count"],
+            "failedCount": row["failed_count"],
+            "createdAt": cls._format_mail_batch_timestamp(row["created_at"]),
+            "startedAt": cls._format_mail_batch_timestamp(row["started_at"]),
+            "finishedAt": cls._format_mail_batch_timestamp(row["finished_at"]),
+            "updatedAt": cls._format_mail_batch_timestamp(row["updated_at"]),
+            "deliveries": deliveries,
+        }
+
+    def _get_mail_batch_with_connection(
+        self, connection: sqlite3.Connection, user_id: int, batch_id: str
+    ) -> dict | None:
+        row = connection.execute(
+            "SELECT * FROM mail_batches WHERE id = ? AND user_id = ?", (batch_id, user_id)
+        ).fetchone()
+        if row is None:
+            return None
+        delivery_rows = connection.execute(
+            "SELECT * FROM mail_deliveries WHERE batch_id = ? ORDER BY rowid ASC", (batch_id,)
+        ).fetchall()
+        return self._mail_batch_from_row(
+            row, [self._mail_delivery_from_row(delivery) for delivery in delivery_rows]
+        )
+
+    def create_mail_batch(
+        self, user_id: int, subject: str, body: str, deliveries: list[dict]
+    ) -> dict:
+        subject, body, deliveries = self._validate_mail_batch_content(subject, body, deliveries)
+        batch_id = uuid.uuid4().hex[:12]
+        now = self._job_timestamp()
+        try:
+            with self.connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO mail_batches(
+                        id, user_id, subject_template, body_template, status, total_count,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
+                    """,
+                    (batch_id, user_id, subject, body, len(deliveries), now, now),
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO mail_deliveries(
+                        id, batch_id, recipient_name, recipient_email, rendered_subject,
+                        rendered_body, status, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)
+                    """,
+                    [
+                        (
+                            uuid.uuid4().hex[:12],
+                            batch_id,
+                            delivery["name"],
+                            delivery["email"],
+                            delivery["subject"],
+                            delivery["body"],
+                            now,
+                        )
+                        for delivery in deliveries
+                    ],
+                )
+                batch = self._get_mail_batch_with_connection(connection, user_id, batch_id)
+        except sqlite3.IntegrityError as error:
+            raise ValueError("mail batch could not be created") from error
+        return batch
+
+    def get_mail_batch(self, user_id: int, batch_id: str) -> dict | None:
+        with self.connect() as connection:
+            return self._get_mail_batch_with_connection(connection, user_id, batch_id)
+
+    def list_mail_batches(self, user_id: int, limit: int = 30) -> list[dict]:
+        if not isinstance(limit, int) or limit <= 0:
+            raise ValueError("limit must be a positive integer")
+        with self.connect() as connection:
+            batch_ids = connection.execute(
+                """
+                SELECT id FROM mail_batches
+                WHERE user_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT ?
+                """,
+                (user_id, limit),
+            ).fetchall()
+            return [
+                self._get_mail_batch_with_connection(connection, user_id, row["id"])
+                for row in batch_ids
+            ]
+
+    def start_mail_batch(self, user_id: int, batch_id: str) -> dict | None:
+        now = self._job_timestamp()
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE mail_batches
+                SET status = 'running', updated_at = ?, started_at = COALESCE(started_at, ?)
+                WHERE id = ? AND user_id = ? AND status = 'queued'
+                """,
+                (now, now, batch_id, user_id),
+            )
+            if cursor.rowcount == 0:
+                return self._get_mail_batch_with_connection(connection, user_id, batch_id)
+            return self._get_mail_batch_with_connection(connection, user_id, batch_id)
+
+    def update_mail_delivery(
+        self,
+        user_id: int,
+        batch_id: str,
+        delivery_id: str,
+        status: str,
+        error_summary: str | None = None,
+    ) -> None:
+        if status not in {"queued", "sending", "succeeded", "failed"}:
+            raise ValueError("invalid mail delivery status")
+        if error_summary is not None and not isinstance(error_summary, str):
+            raise ValueError("error_summary must be a string")
+        now = self._job_timestamp()
+        with self.connect() as connection:
+            owned_batch = connection.execute(
+                "SELECT 1 FROM mail_batches WHERE id = ? AND user_id = ?", (batch_id, user_id)
+            ).fetchone()
+            if owned_batch is None:
+                return
+            connection.execute(
+                """
+                UPDATE mail_deliveries
+                SET status = ?, error_summary = ?, sent_at = ?, updated_at = ?
+                WHERE id = ? AND batch_id = ?
+                """,
+                (
+                    status,
+                    error_summary if status == "failed" else None,
+                    now if status == "succeeded" else None,
+                    now,
+                    delivery_id,
+                    batch_id,
+                ),
+            )
+
+    def finish_mail_batch(self, user_id: int, batch_id: str) -> dict | None:
+        now = self._job_timestamp()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            batch = connection.execute(
+                "SELECT * FROM mail_batches WHERE id = ? AND user_id = ?", (batch_id, user_id)
+            ).fetchone()
+            if batch is None:
+                return None
+            counts = connection.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS sent_count,
+                    SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+                    SUM(CASE WHEN status IN ('queued', 'sending') THEN 1 ELSE 0 END) AS pending_count
+                FROM mail_deliveries WHERE batch_id = ?
+                """,
+                (batch_id,),
+            ).fetchone()
+            sent_count = counts["sent_count"] or 0
+            failed_count = counts["failed_count"] or 0
+            pending_count = counts["pending_count"] or 0
+            if pending_count:
+                status = "running" if batch["status"] == "running" else "queued"
+                finished_at = None
+            elif sent_count == batch["total_count"]:
+                status = "succeeded"
+                finished_at = now
+            elif sent_count and failed_count:
+                status = "partial_failed"
+                finished_at = now
+            else:
+                status = "failed"
+                finished_at = now
+            connection.execute(
+                """
+                UPDATE mail_batches
+                SET status = ?, sent_count = ?, failed_count = ?, updated_at = ?,
+                    finished_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (status, sent_count, failed_count, now, finished_at, batch_id, user_id),
+            )
+            return self._get_mail_batch_with_connection(connection, user_id, batch_id)
+
+    def create_retry_mail_batch(self, user_id: int, batch_id: str) -> dict:
+        with self.connect() as connection:
+            original = connection.execute(
+                "SELECT * FROM mail_batches WHERE id = ? AND user_id = ?", (batch_id, user_id)
+            ).fetchone()
+            if original is None:
+                raise ValueError("mail batch does not exist for user")
+            failed_rows = connection.execute(
+                """
+                SELECT recipient_name, recipient_email, rendered_subject, rendered_body
+                FROM mail_deliveries
+                WHERE batch_id = ? AND status = 'failed'
+                ORDER BY rowid ASC
+                """,
+                (batch_id,),
+            ).fetchall()
+        if not failed_rows:
+            raise ValueError("没有可重试的失败邮件")
+        return self.create_mail_batch(
+            user_id,
+            original["subject_template"],
+            original["body_template"],
+            [
+                {
+                    "name": row["recipient_name"],
+                    "email": row["recipient_email"],
+                    "subject": row["rendered_subject"],
+                    "body": row["rendered_body"],
+                }
+                for row in failed_rows
+            ],
+        )
 
     def _credential_key(self) -> bytes:
         if not isinstance(self.credential_key, str) or not self.credential_key:
