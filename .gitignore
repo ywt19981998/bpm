@@ -17,3 +17,4 @@ output/
 .worktrees/
 bpm-*.png
 bpm-*.json
+.superpowers/
