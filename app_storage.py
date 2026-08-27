@@ -397,19 +397,9 @@ class AppStore:
             return "*" * len(account)
         return f"{account[0]}{'*' * max(3, len(account) - 2)}{account[-1]}"
 
-    def put_integration_credentials(
-        self, user_id: int, system_type: str, account: str, password: str
+    def _upsert_integration_ciphertext(
+        self, user_id: int, system_type: str, ciphertext: bytes, nonce: bytes
     ) -> None:
-        key = self._credential_key()
-        account = account.strip()
-        payload = json.dumps(
-            {"account": account, "password": password},
-            ensure_ascii=False,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        nonce = os.urandom(12)
-        associated_data = self._credential_associated_data(user_id, system_type)
-        ciphertext = AESGCM(key).encrypt(nonce, payload, associated_data)
         now = int(time.time())
         with self.connect() as connection:
             connection.execute(
@@ -425,8 +415,7 @@ class AppStore:
                 (user_id, system_type, ciphertext, nonce, now, now),
             )
 
-    def get_integration_credentials(self, user_id: int, system_type: str) -> dict | None:
-        key = self._credential_key()
+    def _integration_ciphertext_row(self, user_id: int, system_type: str):
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -436,18 +425,51 @@ class AppStore:
                 """,
                 (user_id, system_type),
             ).fetchone()
+        return row
+
+    def put_integration_secret(self, user_id: int, system_type: str, payload: dict) -> None:
+        if not isinstance(payload, dict) or not payload:
+            raise ValueError("integration secret payload must be a non-empty object")
+        key = self._credential_key()
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        nonce = os.urandom(12)
+        ciphertext = AESGCM(key).encrypt(
+            nonce, encoded, self._credential_associated_data(user_id, system_type)
+        )
+        self._upsert_integration_ciphertext(user_id, system_type, ciphertext, nonce)
+
+    def get_integration_secret(self, user_id: int, system_type: str) -> dict | None:
+        row = self._integration_ciphertext_row(user_id, system_type)
         if row is None:
             return None
         try:
-            payload = AESGCM(key).decrypt(
+            payload = AESGCM(self._credential_key()).decrypt(
                 row["nonce"],
                 row["ciphertext"],
                 self._credential_associated_data(user_id, system_type),
             )
-            credentials = json.loads(payload.decode("utf-8"))
+            result = json.loads(payload.decode("utf-8"))
         except (InvalidTag, UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as error:
             raise CredentialConfigurationError("integration credentials could not be decrypted") from error
-        if not isinstance(credentials, dict) or not {"account", "password"} <= credentials.keys():
+        if not isinstance(result, dict):
+            raise CredentialConfigurationError("integration credentials payload is invalid")
+        return result
+
+    def put_integration_credentials(
+        self, user_id: int, system_type: str, account: str, password: str
+    ) -> None:
+        self.put_integration_secret(
+            user_id,
+            system_type,
+            {"account": account.strip(), "password": password},
+        )
+
+    def get_integration_credentials(self, user_id: int, system_type: str) -> dict | None:
+        self._credential_key()
+        credentials = self.get_integration_secret(user_id, system_type)
+        if credentials is None:
+            return None
+        if not {"account", "password"} <= credentials.keys():
             raise CredentialConfigurationError("integration credentials payload is invalid")
         return {"account": credentials["account"], "password": credentials["password"]}
 

@@ -129,6 +129,21 @@ class AppStoreCredentialTests(unittest.TestCase):
             {"configured": False, "accountMasked": None},
         )
 
+    def test_smtp_secret_payload_is_encrypted_masked_and_user_isolated(self):
+        payload = {
+            "host": "smtp.qiye.163.com",
+            "port": 465,
+            "security": "ssl",
+            "account": "editor@example.com",
+            "password": "smtp-auth-code",
+            "fromName": "张编辑",
+            "fromAddress": "editor@example.com",
+        }
+        self.store.put_integration_secret(self.user_id, "smtp", payload)
+        self.assertEqual(self.store.get_integration_secret(self.user_id, "smtp"), payload)
+        self.assertIsNone(self.store.get_integration_secret(self.other_user_id, "smtp"))
+        self.assertNotIn("smtp-auth-code", self.database_text())
+
     def test_missing_or_wrong_key_raises(self):
         self.store.put_integration_credentials(self.user_id, "phei_bpm", "yewt", "bpm-secret")
         wrong_store = AppStore(
