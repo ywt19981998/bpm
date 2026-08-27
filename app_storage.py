@@ -242,6 +242,37 @@ class AppStore:
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (4, int(time.time())),
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mail_templates (
+                    id TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    subject TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    created_at INTEGER NOT NULL,
+                    updated_at INTEGER NOT NULL,
+                    last_used_at INTEGER,
+                    UNIQUE(user_id, name)
+                )
+                """
+            )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS mail_drafts (
+                    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+                    template_id TEXT REFERENCES mail_templates(id) ON DELETE SET NULL,
+                    subject TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    recipients_json TEXT NOT NULL,
+                    updated_at INTEGER NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (5, int(time.time())),
+            )
 
     @staticmethod
     def _normalize_username(username: str) -> str:
@@ -368,6 +399,180 @@ class AppStore:
         token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
         with self.connect() as connection:
             connection.execute("DELETE FROM sessions WHERE token_hash = ?", (token_hash,))
+
+    @staticmethod
+    def _validate_mail_template(name: str, subject: str, body: str) -> tuple[str, str, str]:
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("mail template name is required")
+        if not isinstance(subject, str):
+            raise ValueError("mail template subject must be a string")
+        if not isinstance(body, str):
+            raise ValueError("mail template body must be a string")
+        return name.strip(), subject, body
+
+    @staticmethod
+    def _mail_template_from_row(row: sqlite3.Row) -> dict:
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "subject": row["subject"],
+            "body": row["body"],
+        }
+
+    def create_mail_template(self, user_id: int, name: str, subject: str, body: str) -> dict:
+        name, subject, body = self._validate_mail_template(name, subject, body)
+        template_id = uuid.uuid4().hex[:12]
+        now = int(time.time())
+        try:
+            with self.connect() as connection:
+                connection.execute(
+                    """
+                    INSERT INTO mail_templates(id, user_id, name, subject, body, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (template_id, user_id, name, subject, body, now, now),
+                )
+        except sqlite3.IntegrityError as error:
+            raise ValueError("mail template could not be created") from error
+        return {"id": template_id, "name": name, "subject": subject, "body": body}
+
+    def list_mail_templates(self, user_id: int) -> list[dict]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, name, subject, body
+                FROM mail_templates
+                WHERE user_id = ?
+                ORDER BY created_at ASC, rowid ASC
+                """,
+                (user_id,),
+            ).fetchall()
+        return [self._mail_template_from_row(row) for row in rows]
+
+    def update_mail_template(
+        self, user_id: int, template_id: str, name: str, subject: str, body: str
+    ) -> dict | None:
+        name, subject, body = self._validate_mail_template(name, subject, body)
+        with self.connect() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE mail_templates
+                SET name = ?, subject = ?, body = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (name, subject, body, int(time.time()), template_id, user_id),
+            )
+            if cursor.rowcount == 0:
+                return None
+            row = connection.execute(
+                """
+                SELECT id, name, subject, body
+                FROM mail_templates
+                WHERE id = ? AND user_id = ?
+                """,
+                (template_id, user_id),
+            ).fetchone()
+        return self._mail_template_from_row(row)
+
+    def delete_mail_template(self, user_id: int, template_id: str) -> bool:
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "DELETE FROM mail_templates WHERE id = ? AND user_id = ?",
+                (template_id, user_id),
+            )
+        return cursor.rowcount > 0
+
+    def ensure_default_mail_templates(self, user_id: int, defaults: list[dict]) -> list[dict]:
+        templates = []
+        for default in defaults:
+            if not isinstance(default, dict):
+                raise ValueError("mail template defaults must be objects")
+            templates.append(
+                self._validate_mail_template(
+                    default.get("name"), default.get("subject"), default.get("body")
+                )
+            )
+        now = int(time.time())
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing_count = connection.execute(
+                "SELECT COUNT(*) FROM mail_templates WHERE user_id = ?", (user_id,)
+            ).fetchone()[0]
+            if existing_count == 0:
+                connection.executemany(
+                    """
+                    INSERT INTO mail_templates(id, user_id, name, subject, body, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (uuid.uuid4().hex[:12], user_id, name, subject, body, now, now)
+                        for name, subject, body in templates
+                    ],
+                )
+        return self.list_mail_templates(user_id)
+
+    @staticmethod
+    def _validate_mail_draft(payload: dict) -> tuple[str | None, str, str, str]:
+        if not isinstance(payload, dict):
+            raise ValueError("mail draft payload must be an object")
+        template_id = payload.get("templateId")
+        if template_id is not None and (not isinstance(template_id, str) or not template_id):
+            raise ValueError("mail draft templateId must be a non-empty string or null")
+        subject = payload.get("subject")
+        body = payload.get("body")
+        recipients = payload.get("recipients")
+        if not isinstance(subject, str) or not isinstance(body, str):
+            raise ValueError("mail draft subject and body must be strings")
+        if not isinstance(recipients, list):
+            raise ValueError("mail draft recipients must be a list")
+        try:
+            recipients_json = json.dumps(recipients, ensure_ascii=False, separators=(",", ":"))
+        except (TypeError, ValueError) as error:
+            raise ValueError("mail draft recipients must be JSON serializable") from error
+        return template_id, subject, body, recipients_json
+
+    def get_mail_draft(self, user_id: int) -> dict | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT template_id, subject, body, recipients_json
+                FROM mail_drafts
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "templateId": row["template_id"],
+            "subject": row["subject"],
+            "body": row["body"],
+            "recipients": json.loads(row["recipients_json"]),
+        }
+
+    def put_mail_draft(self, user_id: int, payload: dict) -> None:
+        template_id, subject, body, recipients_json = self._validate_mail_draft(payload)
+        with self.connect() as connection:
+            if template_id is not None:
+                template = connection.execute(
+                    "SELECT 1 FROM mail_templates WHERE id = ? AND user_id = ?",
+                    (template_id, user_id),
+                ).fetchone()
+                if template is None:
+                    raise ValueError("mail template does not exist for user")
+            connection.execute(
+                """
+                INSERT INTO mail_drafts(user_id, template_id, subject, body, recipients_json, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET
+                    template_id = excluded.template_id,
+                    subject = excluded.subject,
+                    body = excluded.body,
+                    recipients_json = excluded.recipients_json,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, template_id, subject, body, recipients_json, int(time.time())),
+            )
 
     def _credential_key(self) -> bytes:
         if not isinstance(self.credential_key, str) or not self.credential_key:
