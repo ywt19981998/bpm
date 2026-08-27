@@ -42,12 +42,20 @@ def validate_mail_compose(
         errors.append("邮件正文不能为空")
     if not recipients:
         errors.append("至少需要一位收件人")
+    for recipient in recipients:
+        name = str(recipient.get("name") or "").strip()
+        email = str(recipient.get("email") or "").strip()
+        if not name:
+            errors.append("收件人姓名不能为空")
+        if not email:
+            errors.append("收件人邮箱不能为空")
+        elif not EMAIL_RE.fullmatch(email):
+            errors.append("收件人邮箱格式无效")
     return errors
 
 
 def parse_recipient_file(data: bytes, filename: str) -> dict:
-    rows = _read_rows(data, filename)
-    columns = _columns_from_rows(rows)
+    columns, rows = _read_rows(data, filename)
     name_column = _find_column(columns, NAME_HEADERS)
     email_column = _find_column(columns, EMAIL_HEADERS)
     if name_column is None or email_column is None:
@@ -86,7 +94,9 @@ def parse_recipient_file(data: bytes, filename: str) -> dict:
     }
 
 
-def _read_rows(data: bytes, filename: str) -> list[dict[str, Any]]:
+def _read_rows(
+    data: bytes, filename: str
+) -> tuple[list[str], list[dict[str, Any]]]:
     suffix = PurePath(filename).suffix.casefold()
     if suffix in {".xlsx", ".xlsm"}:
         return _read_xlsx_rows(data)
@@ -95,21 +105,22 @@ def _read_rows(data: bytes, filename: str) -> list[dict[str, Any]]:
     return _read_csv_rows(data)
 
 
-def _read_csv_rows(data: bytes) -> list[dict[str, Any]]:
+def _read_csv_rows(data: bytes) -> tuple[list[str], list[dict[str, Any]]]:
     last_error = None
     for encoding in ("utf-8-sig", "gb18030"):
         try:
             text = data.decode(encoding)
             reader = csv.DictReader(io.StringIO(text))
             if reader.fieldnames is None:
-                return []
-            return [dict(row) for row in reader]
+                return [], []
+            columns = list(reader.fieldnames)
+            return columns, [dict(row) for row in reader]
         except UnicodeDecodeError as exc:
             last_error = exc
     raise ValueError("CSV 文件编码无法识别") from last_error
 
 
-def _read_xlsx_rows(data: bytes) -> list[dict[str, Any]]:
+def _read_xlsx_rows(data: bytes) -> tuple[list[str], list[dict[str, Any]]]:
     workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     try:
         worksheet = workbook.active
@@ -117,20 +128,14 @@ def _read_xlsx_rows(data: bytes) -> list[dict[str, Any]]:
         try:
             header_row = next(values)
         except StopIteration:
-            return []
+            return [], []
         columns = [str(value or "").strip() for value in header_row]
-        return [
-            {column: value for column, value in zip(columns, row)}
-            for row in values
+        rows = [
+            {column: value for column, value in zip(columns, row)} for row in values
         ]
+        return columns, rows
     finally:
         workbook.close()
-
-
-def _columns_from_rows(rows: list[dict[str, Any]]) -> list[str]:
-    if not rows:
-        return []
-    return list(rows[0].keys())
 
 
 def _find_column(columns: Iterable[str], aliases: set[str]) -> str | None:

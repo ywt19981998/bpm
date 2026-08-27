@@ -84,6 +84,55 @@ class MailRecipientTests(unittest.TestCase):
 
         self.assertEqual(errors, [])
 
+    def test_compose_validation_rejects_recipient_without_name(self):
+        errors = validate_mail_compose(
+            "通知",
+            "正文",
+            [{"email": "zhang@example.com"}],
+        )
+
+        self.assertIn("收件人姓名不能为空", errors)
+
+    def test_compose_validation_rejects_recipient_without_email(self):
+        errors = validate_mail_compose(
+            "通知",
+            "正文",
+            [{"name": "张三"}],
+        )
+
+        self.assertIn("收件人邮箱不能为空", errors)
+
+    def test_compose_validation_rejects_recipient_with_invalid_email(self):
+        errors = validate_mail_compose(
+            "通知",
+            "正文",
+            [{"name": "张三", "email": "not-an-email"}],
+        )
+
+        self.assertIn("收件人邮箱格式无效", errors)
+
+    def test_empty_csv_with_required_headers_is_valid(self):
+        data = "姓名,邮箱\n".encode("utf-8-sig")
+
+        result = parse_recipient_file(data, "teachers.csv")
+
+        self.assertEqual(result["valid"], [])
+        self.assertEqual(result["invalid"], [])
+        self.assertEqual(result["columns"], ["姓名", "邮箱"])
+
+    def test_empty_xlsx_with_required_headers_is_valid(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["姓名", "邮箱"])
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+
+        result = parse_recipient_file(buffer.getvalue(), "teachers.xlsx")
+
+        self.assertEqual(result["valid"], [])
+        self.assertEqual(result["invalid"], [])
+        self.assertEqual(result["columns"], ["姓名", "邮箱"])
+
 
 if __name__ == "__main__":
     unittest.main()
