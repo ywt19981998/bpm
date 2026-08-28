@@ -1550,6 +1550,24 @@
       gap: 12px;
     }
 
+    .settings-integration-section {
+      display: grid;
+      gap: 12px;
+      padding-top: 18px;
+      margin-top: 6px;
+      border-top: 1px solid var(--line);
+    }
+
+    .settings-field-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 128px;
+      gap: 12px;
+    }
+
+    .settings-field-grid-wide {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
     .bpm-account-state {
       display: grid;
       grid-template-columns: 1fr auto;
@@ -1829,6 +1847,11 @@
     }
 
     @media (max-width: 560px) {
+      .settings-field-grid,
+      .settings-field-grid-wide {
+        grid-template-columns: 1fr;
+      }
+
       .brand {
         padding: 0;
       }
@@ -2084,6 +2107,55 @@
             </div>
             <div class="file-state" id="bpmStatus">配置一次后，后续 BPM 任务会自动使用当前账号。</div>
           </div>
+          <section class="settings-integration-section" aria-labelledby="smtpSettingsTitle">
+            <div>
+              <h3 class="panel-title" id="smtpSettingsTitle"><i data-lucide="mail" size="16"></i>发件邮箱（SMTP）</h3>
+              <div class="file-state">用于向学校老师发送邮件，密码或授权码仅加密保存在你的个人设置中。</div>
+            </div>
+            <div class="file-state" id="smtpCredentialAccount">尚未配置发件邮箱</div>
+            <div class="settings-field-grid">
+              <label>
+                <span>SMTP 主机</span>
+                <input id="smtpHost" type="text" autocomplete="off" value="smtp.qiye.163.com" placeholder="例如 smtp.qiye.163.com">
+              </label>
+              <label>
+                <span>端口</span>
+                <input id="smtpPort" type="number" min="1" max="65535" inputmode="numeric" value="465" placeholder="465">
+              </label>
+            </div>
+            <label>
+              <span>加密方式</span>
+              <select id="smtpSecurity">
+                <option value="ssl">SSL</option>
+                <option value="starttls">STARTTLS</option>
+                <option value="none">不加密</option>
+              </select>
+            </label>
+            <label>
+              <span>账号</span>
+              <input id="smtpAccount" type="text" autocomplete="username" placeholder="输入 SMTP 账号">
+            </label>
+            <label>
+              <span>密码或授权码</span>
+              <input id="smtpPassword" type="password" autocomplete="new-password" placeholder="保存或更新时必填，不会回显">
+            </label>
+            <div class="settings-field-grid settings-field-grid-wide">
+              <label>
+                <span>发件人名称</span>
+                <input id="smtpFromName" type="text" autocomplete="off" placeholder="例如 高等教育出版分社">
+              </label>
+              <label>
+                <span>发件地址</span>
+                <input id="smtpFromAddress" type="email" autocomplete="email" placeholder="name@example.com">
+              </label>
+            </div>
+            <div class="top-actions">
+              <button class="primary" id="saveSmtpCredentials" type="button"><i data-lucide="save" size="16"></i>保存配置</button>
+              <button id="testSmtpCredentials" type="button"><i data-lucide="plug-zap" size="16"></i>测试连接</button>
+              <button class="danger" id="clearSmtpCredentials" type="button"><i data-lucide="trash-2" size="16"></i>清除配置</button>
+            </div>
+            <div class="file-state" id="smtpStatus">配置一次后，邮件中心会自动使用当前发件邮箱。</div>
+          </section>
         </div>
       </div>
     </dialog>
@@ -2495,6 +2567,7 @@
     let authorMaintenance = null;
     let currentUser = null;
     let bpmCredentialConfigured = false;
+    let smtpCredentialConfigured = false;
     let projects = [];
     let currentProject = null;
     let currentProjectVersion = null;
@@ -2555,6 +2628,18 @@
     const bpmPassword = document.getElementById("bpmPassword");
     const saveBpmCredentials = document.getElementById("saveBpmCredentials");
     const clearBpmCredentials = document.getElementById("clearBpmCredentials");
+    const smtpCredentialAccount = document.getElementById("smtpCredentialAccount");
+    const smtpHost = document.getElementById("smtpHost");
+    const smtpPort = document.getElementById("smtpPort");
+    const smtpSecurity = document.getElementById("smtpSecurity");
+    const smtpAccount = document.getElementById("smtpAccount");
+    const smtpPassword = document.getElementById("smtpPassword");
+    const smtpFromName = document.getElementById("smtpFromName");
+    const smtpFromAddress = document.getElementById("smtpFromAddress");
+    const saveSmtpCredentials = document.getElementById("saveSmtpCredentials");
+    const testSmtpCredentials = document.getElementById("testSmtpCredentials");
+    const clearSmtpCredentials = document.getElementById("clearSmtpCredentials");
+    const smtpStatus = document.getElementById("smtpStatus");
     const authBusy = new AuthBusyState();
     const authSession = new AuthSessionGeneration();
 
@@ -2703,8 +2788,55 @@
       }
     }
 
+    function resetSmtpFields() {
+      smtpHost.value = "smtp.qiye.163.com";
+      smtpPort.value = "465";
+      smtpSecurity.value = "ssl";
+      smtpAccount.value = "";
+      smtpPassword.value = "";
+      smtpFromName.value = "";
+      smtpFromAddress.value = "";
+    }
+
+    function setSmtpCredentialStatus(status = {}) {
+      smtpCredentialConfigured = Boolean(status.configured);
+      smtpCredentialAccount.textContent = smtpCredentialConfigured
+        ? `已配置 · ${status.accountMasked || "账号已保存"}${status.fromAddressMasked ? ` · ${status.fromAddressMasked}` : ""} · 密码已保存`
+        : "尚未配置发件邮箱";
+      clearSmtpCredentials.disabled = !smtpCredentialConfigured;
+      testSmtpCredentials.disabled = !smtpCredentialConfigured;
+      if (!smtpCredentialConfigured) return;
+      smtpHost.value = status.host || "smtp.qiye.163.com";
+      smtpPort.value = String(status.port || 465);
+      smtpSecurity.value = status.security || "ssl";
+      smtpFromName.value = status.fromName || "";
+      smtpAccount.value = "";
+      smtpPassword.value = "";
+      smtpFromAddress.value = "";
+    }
+
+    async function loadSmtpCredentialStatus(session = captureSession()) {
+      if (!currentUser || !isCurrentSession(session)) return;
+      try {
+        const response = await apiFetch("/api/integrations/smtp", { cache: "no-store", session });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) throw new Error(await responseError(response, "无法读取发件邮箱配置"));
+        const status = await response.json();
+        if (!isCurrentSession(session)) return;
+        setSmtpCredentialStatus(status);
+      } catch (error) {
+        if (!isCurrentSession(session)) return;
+        smtpCredentialConfigured = false;
+        smtpCredentialAccount.textContent = "无法读取发件邮箱配置";
+        clearSmtpCredentials.disabled = true;
+        testSmtpCredentials.disabled = true;
+        smtpStatus.textContent = error.message || "无法读取发件邮箱配置";
+      }
+    }
+
     function closeBpmSettingsDialog() {
       bpmPassword.value = "";
+      smtpPassword.value = "";
       if (bpmSettingsDialog.open) bpmSettingsDialog.close();
     }
 
@@ -2712,6 +2844,7 @@
       if (!currentUser) return;
       bpmUser.value = "";
       bpmPassword.value = "";
+      smtpPassword.value = "";
       if (!bpmSettingsDialog.open) bpmSettingsDialog.showModal();
       window.requestAnimationFrame(() => bpmUser.focus());
     }
@@ -2763,9 +2896,12 @@
       document.getElementById("projectMeta").textContent = "等待上传选题申报表";
       bpmUser.value = "";
       bpmPassword.value = "";
+      resetSmtpFields();
       if (bpmSettingsDialog.open) bpmSettingsDialog.close();
       setBpmCredentialStatus();
+      setSmtpCredentialStatus();
       document.getElementById("bpmStatus").textContent = "配置一次后，后续 BPM 任务会自动使用当前账号。";
+      document.getElementById("smtpStatus").textContent = "配置一次后，邮件中心会自动使用当前发件邮箱。";
       progressPanel.hidden = true;
       progressBar.style.width = "0%";
       bpmProgressPanel.hidden = true;
@@ -2876,6 +3012,7 @@
       render();
       renderBpmPreview();
       loadBpmCredentialStatus();
+      loadSmtpCredentialStatus();
       refreshBpmJobs();
       switchMainView("projects");
       void migrateLegacyDraft(user, captureSession());
@@ -4063,6 +4200,7 @@
     });
     bpmSettingsDialog.addEventListener("close", () => {
       bpmPassword.value = "";
+      smtpPassword.value = "";
     });
     document.getElementById("refreshBpmJobs").addEventListener("click", () => {
       refreshBpmJobs();
@@ -4130,6 +4268,83 @@
         showToast("清除 BPM 配置失败");
       } finally {
         if (isCurrentSession(session) && bpmCredentialConfigured) clearBpmCredentials.disabled = false;
+      }
+    });
+
+    saveSmtpCredentials.addEventListener("click", async () => {
+      const session = captureSession();
+      if (!isCurrentSession(session)) return;
+      const payload = {
+        host: smtpHost.value.trim(),
+        port: smtpPort.value.trim(),
+        security: smtpSecurity.value,
+        account: smtpAccount.value.trim(),
+        password: smtpPassword.value,
+        fromName: smtpFromName.value.trim(),
+        fromAddress: smtpFromAddress.value.trim()
+      };
+      saveSmtpCredentials.disabled = true;
+      try {
+        const response = await apiFetch("/api/integrations/smtp", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          session
+        });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) throw new Error(await responseError(response, "保存发件邮箱配置失败"));
+        smtpPassword.value = "";
+        await loadSmtpCredentialStatus(session);
+        if (!isCurrentSession(session)) return;
+        smtpStatus.textContent = "发件邮箱配置已保存。";
+        showToast("发件邮箱配置已保存");
+      } catch (error) {
+        if (!isCurrentSession(session)) return;
+        smtpStatus.textContent = error.message || "保存发件邮箱配置失败";
+        showToast("保存发件邮箱配置失败");
+      } finally {
+        if (isCurrentSession(session)) saveSmtpCredentials.disabled = false;
+      }
+    });
+
+    testSmtpCredentials.addEventListener("click", async () => {
+      const session = captureSession();
+      if (!isCurrentSession(session) || !smtpCredentialConfigured) return;
+      testSmtpCredentials.disabled = true;
+      try {
+        const response = await apiFetch("/api/integrations/smtp/test", { method: "POST", session });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) throw new Error(await responseError(response, "SMTP 连接测试失败"));
+        smtpStatus.textContent = "SMTP 连接测试成功。";
+        showToast("SMTP 连接测试成功");
+      } catch (error) {
+        if (!isCurrentSession(session)) return;
+        smtpStatus.textContent = error.message || "SMTP 连接测试失败";
+        showToast("SMTP 连接测试失败");
+      } finally {
+        if (isCurrentSession(session)) testSmtpCredentials.disabled = !smtpCredentialConfigured;
+      }
+    });
+
+    clearSmtpCredentials.addEventListener("click", async () => {
+      const session = captureSession();
+      if (!isCurrentSession(session) || !smtpCredentialConfigured) return;
+      if (!window.confirm("确认清除已保存的发件邮箱配置？之后需要重新保存才能发送邮件。")) return;
+      clearSmtpCredentials.disabled = true;
+      try {
+        const response = await apiFetch("/api/integrations/smtp", { method: "DELETE", session });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) throw new Error(await responseError(response, "清除发件邮箱配置失败"));
+        resetSmtpFields();
+        setSmtpCredentialStatus();
+        smtpStatus.textContent = "发件邮箱配置已清除。";
+        showToast("发件邮箱配置已清除");
+      } catch (error) {
+        if (!isCurrentSession(session)) return;
+        smtpStatus.textContent = error.message || "清除发件邮箱配置失败";
+        showToast("清除发件邮箱配置失败");
+      } finally {
+        if (isCurrentSession(session) && smtpCredentialConfigured) clearSmtpCredentials.disabled = false;
       }
     });
 

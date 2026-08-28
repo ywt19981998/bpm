@@ -52,6 +52,14 @@ test("BPM credentials are configured per session without exposing stored secrets
   assert.match(source, /密码已保存/);
 });
 
+test("SMTP credentials are stored in personal settings without client persistence", () => {
+  assert.match(source, /id="smtpHost"/);
+  assert.match(source, /id="smtpPassword"[^>]+type="password"/);
+  assert.match(source, /\/api\/integrations\/smtp/);
+  assert.doesNotMatch(source, /localStorage\.setItem\([^\n]*smtp/i);
+  assert.match(source, /smtpPassword\.value\s*=\s*""/);
+});
+
 test("BPM credentials live in personal settings instead of the BPM task page", () => {
   const dialog = source.match(/<dialog[^>]*id="bpmSettingsDialog"[\s\S]*?<\/dialog>/)?.[0] || "";
   const bpmView = source.match(/<main[^>]*id="bpmView"[\s\S]*?<\/main>/)?.[0] || "";
