@@ -160,7 +160,10 @@ class MailBatchStorageTests(unittest.TestCase):
             self._deliveries(),
         )
         first, second = batch["deliveries"]
+        self.store.start_mail_batch(self.user_id, batch["id"])
+        self.store.update_mail_delivery(self.user_id, batch["id"], first["id"], "sending")
         self.store.update_mail_delivery(self.user_id, batch["id"], first["id"], "succeeded")
+        self.store.update_mail_delivery(self.user_id, batch["id"], second["id"], "sending")
         self.store.update_mail_delivery(
             self.user_id, batch["id"], second["id"], "failed", "连接中断"
         )
@@ -196,8 +199,15 @@ class MailBatchStorageTests(unittest.TestCase):
             self.user_id, "合作邀请", "{{姓名}}老师，您好", self._deliveries()
         )
         succeeded, failed = original["deliveries"]
+        self.store.start_mail_batch(self.user_id, original["id"])
+        self.store.update_mail_delivery(
+            self.user_id, original["id"], succeeded["id"], "sending"
+        )
         self.store.update_mail_delivery(
             self.user_id, original["id"], succeeded["id"], "succeeded"
+        )
+        self.store.update_mail_delivery(
+            self.user_id, original["id"], failed["id"], "sending"
         )
         self.store.update_mail_delivery(
             self.user_id, original["id"], failed["id"], "failed", "连接中断"
@@ -240,10 +250,63 @@ class MailBatchStorageTests(unittest.TestCase):
         started = self.store.start_mail_batch(self.user_id, batch["id"])
         self.assertEqual(started["status"], "running")
         self.store.update_mail_delivery(
+            self.user_id, batch["id"], batch["deliveries"][0]["id"], "sending"
+        )
+        self.store.update_mail_delivery(
             self.user_id, batch["id"], batch["deliveries"][0]["id"], "succeeded"
         )
         finished = self.store.finish_mail_batch(self.user_id, batch["id"])
         self.assertEqual(finished["status"], "succeeded")
+
+    def test_start_is_an_atomic_one_time_claim(self):
+        batch = self.store.create_mail_batch(
+            self.user_id, "合作邀请", "正文", self._deliveries()[:1]
+        )
+
+        first_claim = self.store.start_mail_batch(self.user_id, batch["id"])
+        second_claim = self.store.start_mail_batch(self.user_id, batch["id"])
+
+        self.assertEqual(first_claim["status"], "running")
+        self.assertIsNone(second_claim)
+        self.assertEqual(
+            self.store.get_mail_batch(self.user_id, batch["id"])["status"], "running"
+        )
+
+    def test_delivery_state_machine_blocks_terminal_rollbacks(self):
+        batch = self.store.create_mail_batch(
+            self.user_id, "合作邀请", "正文", self._deliveries()[:1]
+        )
+        delivery = batch["deliveries"][0]
+
+        self.store.update_mail_delivery(
+            self.user_id, batch["id"], delivery["id"], "sending"
+        )
+        self.assertEqual(
+            self.store.get_mail_batch(self.user_id, batch["id"])["deliveries"][0]["status"],
+            "queued",
+        )
+
+        self.store.start_mail_batch(self.user_id, batch["id"])
+        self.store.update_mail_delivery(
+            self.user_id, batch["id"], delivery["id"], "sending"
+        )
+        self.store.update_mail_delivery(
+            self.user_id, batch["id"], delivery["id"], "succeeded"
+        )
+        self.store.update_mail_delivery(
+            self.user_id, batch["id"], delivery["id"], "failed", "should be ignored"
+        )
+        finished = self.store.finish_mail_batch(self.user_id, batch["id"])
+        self.store.update_mail_delivery(
+            self.user_id, batch["id"], delivery["id"], "sending"
+        )
+        finished_again = self.store.finish_mail_batch(self.user_id, batch["id"])
+
+        self.assertEqual(finished["status"], "succeeded")
+        self.assertIsNone(finished_again)
+        final = self.store.get_mail_batch(self.user_id, batch["id"])
+        self.assertEqual(final["status"], "succeeded")
+        self.assertEqual(final["deliveries"][0]["status"], "succeeded")
 
 
 if __name__ == "__main__":

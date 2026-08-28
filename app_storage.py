@@ -829,7 +829,7 @@ class AppStore:
                 (now, now, batch_id, user_id),
             )
             if cursor.rowcount == 0:
-                return self._get_mail_batch_with_connection(connection, user_id, batch_id)
+                return None
             return self._get_mail_batch_with_connection(connection, user_id, batch_id)
 
     def update_mail_delivery(
@@ -840,22 +840,36 @@ class AppStore:
         status: str,
         error_summary: str | None = None,
     ) -> None:
-        if status not in {"queued", "sending", "succeeded", "failed"}:
+        if status not in {"sending", "succeeded", "failed"}:
             raise ValueError("invalid mail delivery status")
         if error_summary is not None and not isinstance(error_summary, str):
             raise ValueError("error_summary must be a string")
         now = self._job_timestamp()
         with self.connect() as connection:
-            owned_batch = connection.execute(
-                "SELECT 1 FROM mail_batches WHERE id = ? AND user_id = ?", (batch_id, user_id)
-            ).fetchone()
-            if owned_batch is None:
+            if status == "sending":
+                connection.execute(
+                    """
+                    UPDATE mail_deliveries
+                    SET status = 'sending', error_summary = NULL, updated_at = ?
+                    WHERE id = ? AND batch_id = ? AND status = 'queued'
+                      AND EXISTS (
+                          SELECT 1 FROM mail_batches
+                          WHERE id = ? AND user_id = ? AND status = 'running'
+                      )
+                    """,
+                    (now, delivery_id, batch_id, batch_id, user_id),
+                )
                 return
+
             connection.execute(
                 """
                 UPDATE mail_deliveries
                 SET status = ?, error_summary = ?, sent_at = ?, updated_at = ?
-                WHERE id = ? AND batch_id = ?
+                WHERE id = ? AND batch_id = ? AND status = 'sending'
+                  AND EXISTS (
+                      SELECT 1 FROM mail_batches
+                      WHERE id = ? AND user_id = ? AND status = 'running'
+                  )
                 """,
                 (
                     status,
@@ -864,6 +878,8 @@ class AppStore:
                     now,
                     delivery_id,
                     batch_id,
+                    batch_id,
+                    user_id,
                 ),
             )
 
@@ -874,7 +890,7 @@ class AppStore:
             batch = connection.execute(
                 "SELECT * FROM mail_batches WHERE id = ? AND user_id = ?", (batch_id, user_id)
             ).fetchone()
-            if batch is None:
+            if batch is None or batch["status"] != "running":
                 return None
             counts = connection.execute(
                 """
@@ -890,25 +906,21 @@ class AppStore:
             failed_count = counts["failed_count"] or 0
             pending_count = counts["pending_count"] or 0
             if pending_count:
-                status = "running" if batch["status"] == "running" else "queued"
-                finished_at = None
-            elif sent_count == batch["total_count"]:
+                return self._get_mail_batch_with_connection(connection, user_id, batch_id)
+            if sent_count == batch["total_count"]:
                 status = "succeeded"
-                finished_at = now
             elif sent_count and failed_count:
                 status = "partial_failed"
-                finished_at = now
             else:
                 status = "failed"
-                finished_at = now
             connection.execute(
                 """
                 UPDATE mail_batches
                 SET status = ?, sent_count = ?, failed_count = ?, updated_at = ?,
                     finished_at = ?
-                WHERE id = ? AND user_id = ?
+                WHERE id = ? AND user_id = ? AND status = 'running'
                 """,
-                (status, sent_count, failed_count, now, finished_at, batch_id, user_id),
+                (status, sent_count, failed_count, now, now, batch_id, user_id),
             )
             return self._get_mail_batch_with_connection(connection, user_id, batch_id)
 
