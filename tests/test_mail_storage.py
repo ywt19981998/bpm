@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app_storage import AppStore
+from app_storage import AppStore, IdempotencyConflict
 
 
 class MailTemplateStorageTests(unittest.TestCase):
@@ -236,24 +236,74 @@ class MailBatchStorageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "没有可重试的失败邮件"):
             self.store.create_retry_mail_batch(self.user_id, batch["id"])
 
+    def test_idempotent_batch_create_is_atomic_and_user_scoped(self):
+        first, first_created = self.store.create_mail_batch_idempotent(
+            self.user_id,
+            "合作邀请",
+            "正文",
+            self._deliveries()[:1],
+            "request-key-001",
+            "fingerprint-a",
+        )
+        replay, replay_created = self.store.create_mail_batch_idempotent(
+            self.user_id,
+            "合作邀请",
+            "正文",
+            self._deliveries()[:1],
+            "request-key-001",
+            "fingerprint-a",
+        )
+        other, other_created = self.store.create_mail_batch_idempotent(
+            self.other_user_id,
+            "合作邀请",
+            "正文",
+            self._deliveries()[:1],
+            "request-key-001",
+            "fingerprint-a",
+        )
+
+        self.assertTrue(first_created)
+        self.assertFalse(replay_created)
+        self.assertEqual(replay["id"], first["id"])
+        self.assertTrue(other_created)
+        self.assertNotEqual(other["id"], first["id"])
+        with self.assertRaises(IdempotencyConflict):
+            self.store.create_mail_batch_idempotent(
+                self.user_id,
+                "已更改",
+                "正文",
+                self._deliveries()[:1],
+                "request-key-001",
+                "fingerprint-b",
+            )
+
     def test_start_and_delivery_status_are_user_scoped(self):
         batch = self.store.create_mail_batch(
             self.user_id, "合作邀请", "正文", self._deliveries()[:1]
         )
 
         self.assertIsNone(self.store.start_mail_batch(self.other_user_id, batch["id"]))
-        self.assertIsNone(
+        self.assertFalse(
             self.store.update_mail_delivery(
                 self.other_user_id, batch["id"], batch["deliveries"][0]["id"], "sending"
             )
         )
         started = self.store.start_mail_batch(self.user_id, batch["id"])
         self.assertEqual(started["status"], "running")
-        self.store.update_mail_delivery(
-            self.user_id, batch["id"], batch["deliveries"][0]["id"], "sending"
+        self.assertTrue(
+            self.store.update_mail_delivery(
+                self.user_id, batch["id"], batch["deliveries"][0]["id"], "sending"
+            )
         )
-        self.store.update_mail_delivery(
-            self.user_id, batch["id"], batch["deliveries"][0]["id"], "succeeded"
+        self.assertTrue(
+            self.store.update_mail_delivery(
+                self.user_id, batch["id"], batch["deliveries"][0]["id"], "succeeded"
+            )
+        )
+        self.assertFalse(
+            self.store.update_mail_delivery(
+                self.user_id, batch["id"], batch["deliveries"][0]["id"], "failed"
+            )
         )
         finished = self.store.finish_mail_batch(self.user_id, batch["id"])
         self.assertEqual(finished["status"], "succeeded")

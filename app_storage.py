@@ -68,6 +68,10 @@ class ProjectVersionConflict(ValueError):
     pass
 
 
+class IdempotencyConflict(ValueError):
+    pass
+
+
 class AppStore:
     def __init__(self, db_path: Path, credential_key: str | None = None):
         self.db_path = Path(db_path)
@@ -343,6 +347,27 @@ class AppStore:
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (8, int(time.time())),
+            )
+            mail_batch_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(mail_batches)").fetchall()
+            }
+            if "request_key" not in mail_batch_columns:
+                connection.execute("ALTER TABLE mail_batches ADD COLUMN request_key TEXT")
+            if "request_fingerprint" not in mail_batch_columns:
+                connection.execute(
+                    "ALTER TABLE mail_batches ADD COLUMN request_fingerprint TEXT"
+                )
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_batches_user_request_key
+                ON mail_batches(user_id, request_key)
+                WHERE request_key IS NOT NULL
+                """
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (9, int(time.time())),
             )
 
     @staticmethod
@@ -771,43 +796,123 @@ class AppStore:
         self, user_id: int, subject: str, body: str, deliveries: list[dict]
     ) -> dict:
         subject, body, deliveries = self._validate_mail_batch_content(subject, body, deliveries)
-        batch_id = uuid.uuid4().hex[:12]
-        now = self._job_timestamp()
         try:
             with self.connect() as connection:
-                connection.execute(
-                    """
-                    INSERT INTO mail_batches(
-                        id, user_id, subject_template, body_template, status, total_count,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
-                    """,
-                    (batch_id, user_id, subject, body, len(deliveries), now, now),
+                batch = self._insert_mail_batch_with_connection(
+                    connection, user_id, subject, body, deliveries
                 )
-                connection.executemany(
-                    """
-                    INSERT INTO mail_deliveries(
-                        id, batch_id, recipient_name, recipient_email, rendered_subject,
-                        rendered_body, status, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)
-                    """,
-                    [
-                        (
-                            uuid.uuid4().hex[:12],
-                            batch_id,
-                            delivery["name"],
-                            delivery["email"],
-                            delivery["subject"],
-                            delivery["body"],
-                            now,
-                        )
-                        for delivery in deliveries
-                    ],
-                )
-                batch = self._get_mail_batch_with_connection(connection, user_id, batch_id)
         except sqlite3.IntegrityError as error:
             raise ValueError("mail batch could not be created") from error
         return batch
+
+    def _insert_mail_batch_with_connection(
+        self,
+        connection: sqlite3.Connection,
+        user_id: int,
+        subject: str,
+        body: str,
+        deliveries: list[dict],
+        request_key: str | None = None,
+        request_fingerprint: str | None = None,
+    ) -> dict:
+        batch_id = uuid.uuid4().hex[:12]
+        now = self._job_timestamp()
+        connection.execute(
+            """
+            INSERT INTO mail_batches(
+                id, user_id, subject_template, body_template, status, total_count,
+                created_at, updated_at, request_key, request_fingerprint
+            ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
+            """,
+            (
+                batch_id,
+                user_id,
+                subject,
+                body,
+                len(deliveries),
+                now,
+                now,
+                request_key,
+                request_fingerprint,
+            ),
+        )
+        connection.executemany(
+            """
+            INSERT INTO mail_deliveries(
+                id, batch_id, recipient_name, recipient_email, rendered_subject,
+                rendered_body, status, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)
+            """,
+            [
+                (
+                    uuid.uuid4().hex[:12],
+                    batch_id,
+                    delivery["name"],
+                    delivery["email"],
+                    delivery["subject"],
+                    delivery["body"],
+                    now,
+                )
+                for delivery in deliveries
+            ],
+        )
+        return self._get_mail_batch_with_connection(connection, user_id, batch_id)
+
+    @staticmethod
+    def _validate_idempotency_values(
+        request_key: str, request_fingerprint: str
+    ) -> tuple[str, str]:
+        if not isinstance(request_key, str) or not request_key:
+            raise ValueError("request_key is required")
+        if not isinstance(request_fingerprint, str) or not request_fingerprint:
+            raise ValueError("request_fingerprint is required")
+        return request_key, request_fingerprint
+
+    def create_mail_batch_idempotent(
+        self,
+        user_id: int,
+        subject: str,
+        body: str,
+        deliveries: list[dict],
+        request_key: str,
+        request_fingerprint: str,
+    ) -> tuple[dict, bool]:
+        subject, body, deliveries = self._validate_mail_batch_content(
+            subject, body, deliveries
+        )
+        request_key, request_fingerprint = self._validate_idempotency_values(
+            request_key, request_fingerprint
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT id, request_fingerprint FROM mail_batches
+                WHERE user_id = ? AND request_key = ?
+                """,
+                (user_id, request_key),
+            ).fetchone()
+            if existing is not None:
+                if existing["request_fingerprint"] != request_fingerprint:
+                    raise IdempotencyConflict(
+                        "Idempotency-Key 已用于不同的邮件请求"
+                    )
+                return (
+                    self._get_mail_batch_with_connection(
+                        connection, user_id, existing["id"]
+                    ),
+                    False,
+                )
+            batch = self._insert_mail_batch_with_connection(
+                connection,
+                user_id,
+                subject,
+                body,
+                deliveries,
+                request_key,
+                request_fingerprint,
+            )
+            return batch, True
 
     def get_mail_batch(self, user_id: int, batch_id: str) -> dict | None:
         with self.connect() as connection:
@@ -853,7 +958,7 @@ class AppStore:
         delivery_id: str,
         status: str,
         error_summary: str | None = None,
-    ) -> None:
+    ) -> bool:
         if status not in {"sending", "succeeded", "failed"}:
             raise ValueError("invalid mail delivery status")
         if error_summary is not None and not isinstance(error_summary, str):
@@ -861,7 +966,7 @@ class AppStore:
         now = self._job_timestamp()
         with self.connect() as connection:
             if status == "sending":
-                connection.execute(
+                cursor = connection.execute(
                     """
                     UPDATE mail_deliveries
                     SET status = 'sending', error_summary = NULL, updated_at = ?
@@ -873,9 +978,9 @@ class AppStore:
                     """,
                     (now, delivery_id, batch_id, batch_id, user_id),
                 )
-                return
+                return cursor.rowcount == 1
 
-            connection.execute(
+            cursor = connection.execute(
                 """
                 UPDATE mail_deliveries
                 SET status = ?, error_summary = ?, sent_at = ?, updated_at = ?
@@ -896,6 +1001,7 @@ class AppStore:
                     user_id,
                 ),
             )
+            return cursor.rowcount == 1
 
     def finish_mail_batch(self, user_id: int, batch_id: str) -> dict | None:
         now = self._job_timestamp()
@@ -970,6 +1076,73 @@ class AppStore:
                 for row in failed_rows
             ],
         )
+
+    def create_retry_mail_batch_idempotent(
+        self,
+        user_id: int,
+        batch_id: str,
+        request_key: str,
+        request_fingerprint: str,
+    ) -> tuple[dict, bool]:
+        request_key, request_fingerprint = self._validate_idempotency_values(
+            request_key, request_fingerprint
+        )
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT id, request_fingerprint FROM mail_batches
+                WHERE user_id = ? AND request_key = ?
+                """,
+                (user_id, request_key),
+            ).fetchone()
+            if existing is not None:
+                if existing["request_fingerprint"] != request_fingerprint:
+                    raise IdempotencyConflict(
+                        "Idempotency-Key 已用于不同的邮件请求"
+                    )
+                return (
+                    self._get_mail_batch_with_connection(
+                        connection, user_id, existing["id"]
+                    ),
+                    False,
+                )
+            original = connection.execute(
+                "SELECT * FROM mail_batches WHERE id = ? AND user_id = ?",
+                (batch_id, user_id),
+            ).fetchone()
+            if original is None:
+                raise ValueError("mail batch does not exist for user")
+            failed_rows = connection.execute(
+                """
+                SELECT recipient_name, recipient_email, rendered_subject, rendered_body
+                FROM mail_deliveries
+                WHERE batch_id = ? AND status = 'failed'
+                ORDER BY rowid ASC
+                """,
+                (batch_id,),
+            ).fetchall()
+            if not failed_rows:
+                raise ValueError("没有可重试的失败邮件")
+            deliveries = [
+                {
+                    "name": row["recipient_name"],
+                    "email": row["recipient_email"],
+                    "subject": row["rendered_subject"],
+                    "body": row["rendered_body"],
+                }
+                for row in failed_rows
+            ]
+            batch = self._insert_mail_batch_with_connection(
+                connection,
+                user_id,
+                original["subject_template"],
+                original["body_template"],
+                deliveries,
+                request_key,
+                request_fingerprint,
+            )
+            return batch, True
 
     def mark_interrupted_mail_batches_failed(self) -> int:
         now = self._job_timestamp()

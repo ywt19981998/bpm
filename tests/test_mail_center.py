@@ -1,5 +1,7 @@
 import io
 import unittest
+import zipfile
+from unittest.mock import patch
 
 from openpyxl import Workbook
 
@@ -139,6 +141,29 @@ class MailRecipientTests(unittest.TestCase):
         self.assertEqual(result["valid"], [])
         self.assertEqual(result["invalid"], [])
         self.assertEqual(result["columns"], ["姓名", "邮箱"])
+
+    def test_recipient_file_rejects_more_than_the_send_limit(self):
+        rows = ["姓名,邮箱"] + [
+            f"老师{index},teacher{index}@example.edu.cn" for index in range(1001)
+        ]
+
+        with self.assertRaisesRegex(ValueError, "1000"):
+            parse_recipient_file("\n".join(rows).encode("utf-8"), "teachers.csv")
+
+    def test_xlsx_rejects_excessive_uncompressed_content(self):
+        workbook = Workbook()
+        sheet = workbook.active
+        sheet.append(["姓名", "邮箱"])
+        buffer = io.BytesIO()
+        workbook.save(buffer)
+
+        expanded = io.BytesIO(buffer.getvalue())
+        with zipfile.ZipFile(expanded, "a", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("xl/oversized.bin", b"x" * 2048)
+
+        with patch("mail_center.MAX_XLSX_UNCOMPRESSED_BYTES", 1024):
+            with self.assertRaisesRegex(ValueError, "解压"):
+                parse_recipient_file(expanded.getvalue(), "teachers.xlsx")
 
 
 class FakeSMTP:

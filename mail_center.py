@@ -7,6 +7,7 @@ import io
 import re
 import smtplib
 import ssl
+import zipfile
 from email.message import EmailMessage
 from email.utils import formataddr
 from pathlib import PurePath
@@ -21,6 +22,8 @@ EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 VARIABLE_RE = re.compile(r"\{\{\s*(.*?)\s*\}\}")
 SMTP_SECURITY_OPTIONS = {"ssl", "starttls", "none"}
 SMTP_TIMEOUT_SECONDS = 20
+MAX_RECIPIENT_ROWS = 1000
+MAX_XLSX_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
 
 
 def normalize_header(value: Any) -> str:
@@ -239,13 +242,26 @@ def _read_csv_rows(data: bytes) -> tuple[list[str], list[dict[str, Any]]]:
             if reader.fieldnames is None:
                 return [], []
             columns = list(reader.fieldnames)
-            return columns, [dict(row) for row in reader]
+            rows = []
+            for row in reader:
+                rows.append(dict(row))
+                if len(rows) > MAX_RECIPIENT_ROWS:
+                    raise ValueError(f"名单最多支持 {MAX_RECIPIENT_ROWS} 行")
+            return columns, rows
         except UnicodeDecodeError as exc:
             last_error = exc
     raise ValueError("CSV 文件编码无法识别") from last_error
 
 
 def _read_xlsx_rows(data: bytes) -> tuple[list[str], list[dict[str, Any]]]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            uncompressed_size = sum(item.file_size for item in archive.infolist())
+    except zipfile.BadZipFile as error:
+        raise ValueError("XLSX 文件损坏或格式无效") from error
+    if uncompressed_size > MAX_XLSX_UNCOMPRESSED_BYTES:
+        raise ValueError("XLSX 解压后内容过大")
+
     workbook = load_workbook(io.BytesIO(data), read_only=True, data_only=True)
     try:
         worksheet = workbook.active
@@ -255,9 +271,11 @@ def _read_xlsx_rows(data: bytes) -> tuple[list[str], list[dict[str, Any]]]:
         except StopIteration:
             return [], []
         columns = [str(value or "").strip() for value in header_row]
-        rows = [
-            {column: value for column, value in zip(columns, row)} for row in values
-        ]
+        rows = []
+        for row in values:
+            rows.append({column: value for column, value in zip(columns, row)})
+            if len(rows) > MAX_RECIPIENT_ROWS:
+                raise ValueError(f"名单最多支持 {MAX_RECIPIENT_ROWS} 行")
         return columns, rows
     finally:
         workbook.close()

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
+import fcntl
 import re
+import socket
 import tempfile
 import urllib.error
 import urllib.request
@@ -19,6 +22,7 @@ import shutil
 import subprocess
 import threading
 import uuid
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -30,7 +34,7 @@ from http.cookies import CookieError, SimpleCookie
 from docx import Document
 from dotenv import load_dotenv
 
-from app_storage import AppStore, ProjectVersionConflict
+from app_storage import AppStore, IdempotencyConflict, ProjectVersionConflict
 from mail_center import (
     normalize_smtp_settings,
     parse_recipient_file,
@@ -65,8 +69,6 @@ APP_STORE = AppStore(
 PROJECT_FILE_STORE = ProjectFileStore(
     Path(os.environ.get("PHEI_PROJECTS_PATH", ROOT / "data" / "projects"))
 )
-APP_STORE.mark_interrupted_jobs_failed()
-APP_STORE.mark_interrupted_mail_batches_failed()
 SESSION_COOKIE_NAME = "phei_session"
 STATIC_ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -99,6 +101,16 @@ DEFAULT_MAIL_TEMPLATES = [
 ]
 MAX_MAIL_RECIPIENTS = 1000
 MAX_MAIL_RECIPIENT_FILE_BYTES = 10 * 1024 * 1024
+MAX_JSON_BODY_BYTES = 2 * 1024 * 1024
+JSON_READ_TIMEOUT_SECONDS = 15
+IDEMPOTENCY_KEY_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{7,127}\Z")
+SERVER_LOCK_PATH = Path(
+    os.environ.get("PHEI_LOCK_PATH", str(APP_STORE.db_path.with_suffix(".server.lock")))
+)
+
+
+class RequestHandled(Exception):
+    pass
 
 
 class MultipartForm:
@@ -2531,6 +2543,16 @@ def render_mail_deliveries(subject: str, body: str, recipients) -> list[dict]:
     return rendered
 
 
+def mail_request_fingerprint(operation: str, payload: dict) -> str:
+    canonical = json.dumps(
+        {"operation": operation, **payload},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
 def fail_unfinished_mail_batch(
     user_id: int, batch_id: str, error: Exception, settings: dict | None = None
 ) -> None:
@@ -2565,9 +2587,11 @@ def process_mail_batch(batch_id: str, user_id: int):
         settings.clear()
         settings.update(normalized_settings)
         for delivery in batch["deliveries"]:
-            APP_STORE.update_mail_delivery(
+            claimed = APP_STORE.update_mail_delivery(
                 user_id, batch_id, delivery["id"], "sending"
             )
+            if not claimed:
+                continue
             try:
                 send_smtp_message(settings, delivery)
                 APP_STORE.update_mail_delivery(
@@ -2600,6 +2624,12 @@ def schedule_mail_batch(batch_id: str, user_id: int) -> None:
 
 
 class Handler(BaseHTTPRequestHandler):
+    def handle_one_request(self):
+        try:
+            super().handle_one_request()
+        except RequestHandled:
+            return
+
     def end_headers(self):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
@@ -2635,8 +2665,39 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(data)
 
     def read_json(self) -> dict:
-        length = int(self.headers.get("Content-Length", "0"))
-        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except (TypeError, ValueError) as error:
+            raise ValueError("Content-Length 无效。") from error
+        if length <= 0:
+            raise ValueError("JSON 请求体不能为空。")
+        if length > MAX_JSON_BODY_BYTES:
+            self.close_connection = True
+            self.send_json(
+                413,
+                {
+                    "error": "JSON 请求体不得超过 2 MB。",
+                    "code": "REQUEST_BODY_TOO_LARGE",
+                },
+            )
+            raise RequestHandled()
+
+        previous_timeout = self.connection.gettimeout()
+        self.connection.settimeout(JSON_READ_TIMEOUT_SECONDS)
+        try:
+            raw = self.rfile.read(length)
+        except (TimeoutError, socket.timeout):
+            self.close_connection = True
+            self.send_json(
+                408,
+                {"error": "读取请求体超时。", "code": "REQUEST_BODY_TIMEOUT"},
+            )
+            raise RequestHandled()
+        finally:
+            self.connection.settimeout(previous_timeout)
+        if len(raw) != length:
+            raise ValueError("JSON 请求体不完整。")
+        payload = json.loads(raw.decode("utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("JSON 请求体必须是对象。")
         return payload
@@ -2933,8 +2994,24 @@ class Handler(BaseHTTPRequestHandler):
         forbidden = {"password", "smtp", "smtpsettings", "smtpconfig", "authorization"}
         return any(str(key).casefold() in forbidden for key in payload)
 
+    def require_idempotency_key(self) -> str | None:
+        request_key = self.headers.get("Idempotency-Key", "").strip()
+        if IDEMPOTENCY_KEY_RE.fullmatch(request_key):
+            return request_key
+        self.send_json(
+            400,
+            {
+                "error": "Idempotency-Key 必须为 8—128 位字母、数字或 . _ : -。",
+                "code": "MAIL_IDEMPOTENCY_KEY_INVALID",
+            },
+        )
+        return None
+
     def handle_mail_batch_create(self, user: dict):
         try:
+            request_key = self.require_idempotency_key()
+            if request_key is None:
+                return
             payload = self.read_json()
             if self.payload_contains_mail_secret(payload):
                 self.send_json(
@@ -2963,19 +3040,41 @@ class Handler(BaseHTTPRequestHandler):
             deliveries = render_mail_deliveries(
                 subject, body, payload.get("recipients")
             )
-            batch = APP_STORE.create_mail_batch(
-                user["id"], subject.strip(), body, deliveries
+            normalized_subject = subject.strip()
+            request_fingerprint = mail_request_fingerprint(
+                "create",
+                {
+                    "subject": normalized_subject,
+                    "body": body,
+                    "deliveries": deliveries,
+                },
+            )
+            batch, created = APP_STORE.create_mail_batch_idempotent(
+                user["id"],
+                normalized_subject,
+                body,
+                deliveries,
+                request_key,
+                request_fingerprint,
             )
             template_id = payload.get("templateId")
-            if isinstance(template_id, str) and template_id:
+            if created and isinstance(template_id, str) and template_id:
                 APP_STORE.touch_mail_template(user["id"], template_id)
-            schedule_mail_batch(batch["id"], user["id"])
-            self.send_json(201, {"batch": batch})
+            if created:
+                schedule_mail_batch(batch["id"], user["id"])
+            self.send_json(201 if created else 200, {"batch": batch, "created": created})
+        except IdempotencyConflict as error:
+            self.send_json(
+                409, {"error": str(error), "code": "MAIL_IDEMPOTENCY_CONFLICT"}
+            )
         except (TypeError, ValueError, json.JSONDecodeError) as error:
             self.send_json(400, {"error": str(error), "code": "MAIL_BATCH_INVALID"})
 
     def handle_mail_batch_retry(self, user: dict, batch_id: str):
         try:
+            request_key = self.require_idempotency_key()
+            if request_key is None:
+                return
             payload = self.read_json()
             if payload.get("confirmed") is not True:
                 self.send_json(
@@ -2990,9 +3089,19 @@ class Handler(BaseHTTPRequestHandler):
             if settings is None:
                 return
             settings.clear()
-            batch = APP_STORE.create_retry_mail_batch(user["id"], batch_id)
-            schedule_mail_batch(batch["id"], user["id"])
-            self.send_json(201, {"batch": batch})
+            request_fingerprint = mail_request_fingerprint(
+                "retry", {"batchId": batch_id}
+            )
+            batch, created = APP_STORE.create_retry_mail_batch_idempotent(
+                user["id"], batch_id, request_key, request_fingerprint
+            )
+            if created:
+                schedule_mail_batch(batch["id"], user["id"])
+            self.send_json(201 if created else 200, {"batch": batch, "created": created})
+        except IdempotencyConflict as error:
+            self.send_json(
+                409, {"error": str(error), "code": "MAIL_IDEMPOTENCY_CONFLICT"}
+            )
         except json.JSONDecodeError as error:
             self.send_json(400, {"error": str(error), "code": "MAIL_BATCH_INVALID"})
         except ValueError as error:
@@ -3791,12 +3900,36 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
+@contextmanager
+def single_instance_lock(lock_path: Path):
+    lock_path = Path(lock_path)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+")
+    try:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise RuntimeError("服务已在运行，请勿重复启动。") from error
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        finally:
+            handle.close()
+
+
 def main():
     host = os.environ.get("PHEI_HOST", "127.0.0.1")
     port = int(os.environ.get("PHEI_PORT", "4174"))
-    server = ThreadingHTTPServer((host, port), Handler)
-    print(f"Serving http://{host}:{port}/index.html")
-    server.serve_forever()
+    with single_instance_lock(SERVER_LOCK_PATH):
+        APP_STORE.mark_interrupted_jobs_failed()
+        APP_STORE.mark_interrupted_mail_batches_failed()
+        server = ThreadingHTTPServer((host, port), Handler)
+        try:
+            print(f"Serving http://{host}:{port}/index.html")
+            server.serve_forever()
+        finally:
+            server.server_close()
 
 
 if __name__ == "__main__":

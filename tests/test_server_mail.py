@@ -1,9 +1,13 @@
 import base64
 import http.client
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -132,6 +136,7 @@ class ServerMailHttpTests(unittest.TestCase):
             "POST", "/api/mail/batches",
             {"confirmed": False, "subject": "邀请", "body": "正文", "recipients": [recipient()]},
             self.cookie,
+            {"Idempotency-Key": "create-confirmation-001"},
         )
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(body)["code"], "MAIL_CONFIRMATION_REQUIRED")
@@ -141,6 +146,7 @@ class ServerMailHttpTests(unittest.TestCase):
                 "POST", "/api/mail/batches",
                 {"confirmed": True, "subject": "邀请", "body": "{{姓名}}老师您好", "recipients": [recipient()]},
                 self.cookie,
+                {"Idempotency-Key": "create-user-scope-001"},
             )
         self.assertEqual(status, 201)
         batch = json.loads(body)["batch"]
@@ -274,6 +280,7 @@ class ServerMailHttpTests(unittest.TestCase):
             f"/api/mail/batches/{original['id']}/retry",
             {"confirmed": False},
             self.cookie,
+            {"Idempotency-Key": "retry-confirmation-001"},
         )
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(body)["code"], "MAIL_CONFIRMATION_REQUIRED")
@@ -284,11 +291,24 @@ class ServerMailHttpTests(unittest.TestCase):
                 f"/api/mail/batches/{original['id']}/retry",
                 {"confirmed": True},
                 self.cookie,
+                {"Idempotency-Key": "retry-failed-mail-001"},
             )
         self.assertEqual(status, 201)
         retry = json.loads(body)["batch"]
         self.assertEqual(retry["totalCount"], 1)
         schedule.assert_called_once_with(retry["id"], user["id"])
+
+        with patch("server.schedule_mail_batch") as replay_schedule:
+            status, _, body = self.request(
+                "POST",
+                f"/api/mail/batches/{original['id']}/retry",
+                {"confirmed": True},
+                self.cookie,
+                {"Idempotency-Key": "retry-failed-mail-001"},
+            )
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["batch"]["id"], retry["id"])
+        replay_schedule.assert_not_called()
 
     def test_mail_batch_scheduler_uses_a_daemon_thread(self):
         with patch("server.threading.Thread") as worker:
@@ -314,9 +334,84 @@ class ServerMailHttpTests(unittest.TestCase):
                 "password": "forged-secret",
             },
             self.cookie,
+            {"Idempotency-Key": "create-secret-check-001"},
         )
         self.assertEqual(status, 400)
         self.assertEqual(json.loads(body)["code"], "MAIL_CLIENT_SECRET_FORBIDDEN")
+
+    def test_batch_creation_requires_a_valid_idempotency_key(self):
+        self.save_smtp_config()
+        payload = {
+            "confirmed": True,
+            "subject": "邀请",
+            "body": "正文",
+            "recipients": [recipient()],
+        }
+
+        status, _, body = self.request(
+            "POST", "/api/mail/batches", payload, self.cookie
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body)["code"], "MAIL_IDEMPOTENCY_KEY_INVALID")
+
+        status, _, body = self.request(
+            "POST",
+            "/api/mail/batches",
+            payload,
+            self.cookie,
+            {"Idempotency-Key": "bad key with spaces"},
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(json.loads(body)["code"], "MAIL_IDEMPOTENCY_KEY_INVALID")
+
+    def test_json_request_body_has_a_hard_size_limit(self):
+        with patch("server.MAX_JSON_BODY_BYTES", 1024):
+            status, _, body = self.request(
+                "POST",
+                "/api/mail/templates",
+                {"name": "超大模板", "subject": "x" * 2048, "body": "正文"},
+                self.cookie,
+            )
+
+        self.assertEqual(status, 413)
+        self.assertEqual(json.loads(body)["code"], "REQUEST_BODY_TOO_LARGE")
+
+    def test_batch_creation_is_persistently_idempotent_and_detects_conflict(self):
+        self.save_smtp_config()
+        payload = {
+            "confirmed": True,
+            "subject": "合作邀请",
+            "body": "{{姓名}}老师您好",
+            "recipients": [recipient()],
+        }
+        headers = {"Idempotency-Key": "create-mail-batch-001"}
+
+        with patch("server.schedule_mail_batch") as schedule:
+            first_status, _, first_body = self.request(
+                "POST", "/api/mail/batches", payload, self.cookie, headers
+            )
+            replay_status, _, replay_body = self.request(
+                "POST", "/api/mail/batches", payload, self.cookie, headers
+            )
+
+        self.assertEqual(first_status, 201)
+        self.assertEqual(replay_status, 200)
+        first = json.loads(first_body)["batch"]
+        replay = json.loads(replay_body)["batch"]
+        self.assertEqual(replay["id"], first["id"])
+        schedule.assert_called_once_with(first["id"], 1)
+
+        conflict_status, _, conflict_body = self.request(
+            "POST",
+            "/api/mail/batches",
+            {**payload, "subject": "另一个主题"},
+            self.cookie,
+            headers,
+        )
+        self.assertEqual(conflict_status, 409)
+        self.assertEqual(
+            json.loads(conflict_body)["code"], "MAIL_IDEMPOTENCY_CONFLICT"
+        )
 
     def test_parse_endpoint_accepts_csv(self):
         boundary = "mail-boundary"
@@ -382,6 +477,102 @@ class ServerMailHttpTests(unittest.TestCase):
         result = server.APP_STORE.get_mail_batch(user["id"], batch["id"])
         self.assertEqual(result["status"], "failed")
         self.assertNotIn("smtp-auth-code", json.dumps(result, ensure_ascii=False))
+
+    def test_process_mail_batch_sends_only_after_claiming_delivery_state(self):
+        self.save_smtp_config()
+        user = server.APP_STORE.get_user_for_session(self.cookie.split("=", 1)[1])
+        batch = server.APP_STORE.create_mail_batch(
+            user["id"], "邀请", "正文", [{**recipient(), "subject": "邀请", "body": "正文"}]
+        )
+        original_update = server.APP_STORE.update_mail_delivery
+
+        def lose_delivery_claim(user_id, batch_id, delivery_id, status, error_summary=None):
+            if status == "sending":
+                return False
+            return original_update(user_id, batch_id, delivery_id, status, error_summary)
+
+        with patch.object(
+            server.APP_STORE, "update_mail_delivery", side_effect=lose_delivery_claim
+        ), patch("server.send_smtp_message") as send:
+            server.process_mail_batch(batch["id"], user["id"])
+
+        send.assert_not_called()
+
+
+class ServerStartupSafetyTests(unittest.TestCase):
+    def test_import_does_not_mark_interrupted_batches(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            db_path = Path(temp_dir) / "app.db"
+            key = base64.urlsafe_b64encode(b"i" * 32).decode("ascii")
+            store = AppStore(db_path, credential_key=key)
+            user_id = store.register_user("importcheck", "S3cure-pass", "导入检查")["id"]
+            batch = store.create_mail_batch(
+                user_id,
+                "待发送",
+                "正文",
+                [{**recipient(), "subject": "待发送", "body": "正文"}],
+            )
+            env = os.environ.copy()
+            env.update(
+                {
+                    "PHEI_DB_PATH": str(db_path),
+                    "PHEI_PROJECTS_PATH": str(Path(temp_dir) / "projects"),
+                    "APP_CREDENTIAL_KEY": key,
+                }
+            )
+
+            completed = subprocess.run(
+                [sys.executable, "-c", "import server"],
+                cwd=server.ROOT,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            reopened = AppStore(db_path, credential_key=key)
+            self.assertEqual(reopened.get_mail_batch(user_id, batch["id"])["status"], "queued")
+
+    def test_single_instance_lock_rejects_a_second_holder(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            lock_path = Path(temp_dir) / "server.lock"
+            with server.single_instance_lock(lock_path):
+                with self.assertRaisesRegex(RuntimeError, "已在运行"):
+                    with server.single_instance_lock(lock_path):
+                        pass
+
+    def test_main_locks_before_recovering_interrupted_work(self):
+        events = []
+
+        @contextmanager
+        def fake_lock(_path):
+            events.append("lock")
+            yield
+            events.append("unlock")
+
+        class FakeServer:
+            def serve_forever(self):
+                events.append("serve")
+
+            def server_close(self):
+                events.append("close")
+
+        with patch("server.single_instance_lock", fake_lock), patch.object(
+            server.APP_STORE,
+            "mark_interrupted_jobs_failed",
+            side_effect=lambda: events.append("recover-jobs"),
+        ), patch.object(
+            server.APP_STORE,
+            "mark_interrupted_mail_batches_failed",
+            side_effect=lambda: events.append("recover-mail"),
+        ), patch("server.ThreadingHTTPServer", return_value=FakeServer()):
+            server.main()
+
+        self.assertEqual(
+            events,
+            ["lock", "recover-jobs", "recover-mail", "serve", "close", "unlock"],
+        )
 
 
 if __name__ == "__main__":
