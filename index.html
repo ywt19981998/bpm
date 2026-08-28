@@ -2154,7 +2154,7 @@
               <button id="testSmtpCredentials" type="button"><i data-lucide="plug-zap" size="16"></i>测试连接</button>
               <button class="danger" id="clearSmtpCredentials" type="button"><i data-lucide="trash-2" size="16"></i>清除配置</button>
             </div>
-            <div class="file-state" id="smtpStatus">配置一次后，邮件中心会自动使用当前发件邮箱。</div>
+            <div class="file-state" id="smtpStatus" role="status" aria-live="polite">配置一次后，邮件中心会自动使用当前发件邮箱。</div>
           </section>
         </div>
       </div>
@@ -2906,7 +2906,15 @@
       progressBar.style.width = "0%";
       bpmProgressPanel.hidden = true;
       bpmProgressBar.style.width = "0%";
-      ["importBpmSources", "generateAll", "queueBpm", "queueAuthor", "saveBpmCredentials", "logoutButton"].forEach((id) => {
+      [
+        "importBpmSources",
+        "generateAll",
+        "queueBpm",
+        "queueAuthor",
+        "saveBpmCredentials",
+        "saveSmtpCredentials",
+        "logoutButton"
+      ].forEach((id) => {
         document.getElementById(id).disabled = false;
       });
       projectCenterView.hidden = false;

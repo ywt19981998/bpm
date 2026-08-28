@@ -60,6 +60,14 @@ test("SMTP credentials are stored in personal settings without client persistenc
   assert.match(source, /smtpPassword\.value\s*=\s*""/);
 });
 
+test("SMTP settings announce results and reset controls between user sessions", () => {
+  assert.match(source, /id="smtpStatus"[^>]*role="status"[^>]*aria-live="polite"/);
+  assert.match(
+    source,
+    /\[\s*"importBpmSources",[\s\S]*"saveSmtpCredentials"[\s\S]*\.disabled = false/
+  );
+});
+
 test("BPM credentials live in personal settings instead of the BPM task page", () => {
   const dialog = source.match(/<dialog[^>]*id="bpmSettingsDialog"[\s\S]*?<\/dialog>/)?.[0] || "";
   const bpmView = source.match(/<main[^>]*id="bpmView"[\s\S]*?<\/main>/)?.[0] || "";
