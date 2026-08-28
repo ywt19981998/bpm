@@ -48,6 +48,10 @@ Normalize the user's material into a JSON object like this:
   "reader": "读者对象",
   "feature": "选题特色",
   "compare": "同类选题比较",
+  "compareSources": [
+    {"title": "同类图书1", "url": "可核验来源网址"},
+    {"title": "同类图书2", "url": "可核验来源网址"}
+  ],
   "readerNum": "100",
   "language": "中文",
   "scriptSource": "作者独立投稿",
@@ -181,7 +185,7 @@ Normalize the user's material into a JSON object like this:
 - For `authorMaintenance`, submit extracted author information directly to BPM. Only `bio`/作者简介 requires real content. If the application form lacks 作者简介, use the configured model/search workflow to summarize public school or department official-page information. For every other missing author-maintenance field, use a single full-width space `　` so the BPM form can be saved.
 - `editorName` is injected by the server from the authenticated web user's display name and is only a pre-login fallback. After BPM login, read the full name from the top-right personal profile panel and overwrite both `projectEditor` and `editor` with that BPM account-holder name; do not accept a client-supplied editor identity.
 - BPM declaration classification locks the top-level fields: `class1` is 教育 (`02`), `class2` is 本科研究生 (`0201`), `gbClass` is `G`, and `readLevel` is 高等理工. Infer only `class3` and `class4` from the title, subject, generated report content, or model-provided classification suggestion.
-- `feature` and `compare` should come from dedicated generation fields when available: `bpmFields.feature` and `bpmFields.compare`. `feature` should be structured around 内容范围、写作特点、实践教学、教学资源建设、其他特点; `compare` should summarize same-type titles/materials without inventing precise sales or ranking data.
+- `brief`, `reader`, `feature`, and `compare` come from dedicated generation fields: `bpmFields.brief`, `bpmFields.reader`, `bpmFields.feature`, and `bpmFields.compare`. Do not substitute whole report sections. `compare` must use exactly two books from live search context, and `compareSources` stores their traceable URLs without writing URLs into the BPM textarea. If fewer than two sources are verified, leave `compare` and `compareSources` empty rather than fabricate books.
 - The topic score table should use the generated report scores: content, author, feasibility, award, profit, marketing, and total.
 - Cost estimation values are fixed to the `costDefaults` block above until the user gives a new cost policy. In the cost-estimation subform, do not fill the hidden/auto `CHARNUM` copyright-word field; only fill the marked cost fields such as pricing, prepress, printing, paper, sales, discount, storage/transport, and management-fee fields.
 - `projectEditor` and `editor` names come from the currently logged-in BPM account profile. Their complete hidden identities require both the corresponding `NO` and `UID` fields; these IDs must be provided by existing values on the BPM 页面 or by the BPM 人员选择器.

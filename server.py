@@ -15,6 +15,7 @@ from html import unescape
 import io
 import os
 import queue
+import shutil
 import subprocess
 import threading
 import uuid
@@ -411,7 +412,56 @@ def parse_search_results(html: str) -> list[dict]:
     return results
 
 
+def parse_exa_search_output(output: str) -> list[dict]:
+    results = []
+    for block in re.split(r"\n\s*---\s*\n", output or ""):
+        title_match = re.search(r"(?m)^Title:\s*(.+)$", block)
+        url_match = re.search(r"(?m)^URL:\s*(https?://\S+)$", block)
+        if not title_match or not url_match:
+            continue
+        highlight_match = re.search(r"(?s)Highlights:\s*(.+)$", block)
+        results.append(
+            {
+                "title": strip_indent(title_match.group(1)),
+                "url": strip_indent(url_match.group(1)),
+                "excerpt": short_text(
+                    strip_indent(highlight_match.group(1)) if highlight_match else "",
+                    2400,
+                ),
+            }
+        )
+    return results[:8]
+
+
+def search_web_results_exa(query: str, limit: int = 8) -> list[dict]:
+    executable = shutil.which("mcporter")
+    if not executable:
+        return []
+    expression = (
+        "exa.web_search_exa(query: "
+        f"{json.dumps(query, ensure_ascii=False)}, numResults: {max(1, min(8, limit))})"
+    )
+    try:
+        completed = subprocess.run(
+            [executable, "call", expression],
+            capture_output=True,
+            text=True,
+            timeout=25,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        runtime_log(f"exa search failed error={type(exc).__name__}: {exc}")
+        return []
+    if completed.returncode != 0:
+        runtime_log(f"exa search failed status={completed.returncode}")
+        return []
+    return parse_exa_search_output(completed.stdout)
+
+
 def search_web_results(query: str) -> list[dict]:
+    exa_results = search_web_results_exa(query)
+    if exa_results:
+        return exa_results
     url = f"https://www.bing.com/search?q={quote(query)}&setlang=zh-CN"
     html = fetch_url_text(url, timeout=7, limit=220000)
     return parse_search_results(html)
@@ -451,8 +501,10 @@ def author_official_search_context(facts: dict) -> dict:
     ranked = sorted(results, key=lambda item: official_score(item, unit), reverse=True)
     selected = []
     for result in ranked[:4]:
-        page_html = fetch_url_text(result["url"], timeout=5, limit=120000)
-        page_text = html_to_text(page_html)
+        page_text = strip_indent(str(result.get("excerpt", "") or ""))
+        if not page_text:
+            page_html = fetch_url_text(result["url"], timeout=5, limit=120000)
+            page_text = html_to_text(page_html)
         if name not in page_text and official_score(result, unit) < 5:
             excerpt = ""
         else:
@@ -480,6 +532,106 @@ def author_official_search_context(facts: dict) -> dict:
     else:
         runtime_log(f"author-search no usable official text name={name}")
     return context if context["results"] else {}
+
+
+BOOK_SOURCE_HOST_SCORES = {
+    "ecsponline.com": 6,
+    "cepp.sgcc.com.cn": 6,
+    "pup.cn": 6,
+    "tup.tsinghua.edu.cn": 6,
+    "epubit.com": 6,
+    "cmpbook.com": 6,
+    "dushu.com": 3,
+    "jd.com": 2,
+    "dangdang.com": 2,
+}
+
+
+def comparison_topic(title: str) -> str:
+    topic = re.sub(
+        r"(?:项目式|案例式|新形态|数字|一体化)?(?:教程|教材|实战|基础与应用|技术及应用|应用技术)$",
+        "",
+        strip_indent(title),
+    )
+    return topic.strip(" ：:—-《》") or strip_indent(title)
+
+
+def book_title_identity(title: str) -> str:
+    identity = re.split(r"_|\s+-\s+|[|｜]", strip_indent(title), maxsplit=1)[0]
+    return re.sub(r"[《》\s]", "", identity).lower()
+
+
+def book_search_score(result: dict, topic: str) -> int:
+    url = str(result.get("url", "") or "")
+    title = str(result.get("title", "") or "")
+    host = urlparse(url).netloc.lower()
+    score = max(
+        (value for domain, value in BOOK_SOURCE_HOST_SCORES.items() if domain in host),
+        default=0,
+    )
+    if any(token in title for token in ("出版社", "图书", "教材", "书店", "商城")):
+        score += 2
+    topic_tokens = [token for token in re.split(r"[与及和、：:\s]+", topic) if len(token) >= 2]
+    score += sum(1 for token in topic_tokens[:4] if token in title)
+    if any(token in title for token in ("论文", "会议", "招聘", "新闻", "政策")):
+        score -= 4
+    return score
+
+
+def book_comparison_search_context(facts: dict) -> list[dict]:
+    title = field_value(facts, "教材名称", "选题名称", "选题名", "书名")
+    if not title:
+        return []
+    topic = comparison_topic(title)
+    queries = [
+        f"{topic} 同类图书 教材 出版社",
+        f"{topic} 专著 图书 ISBN 目录",
+    ]
+    candidates = []
+    seen_urls = set()
+    for query in queries:
+        try:
+            results = search_web_results(query)
+        except Exception as exc:
+            runtime_log(f"book-search query failed title={title} error={type(exc).__name__}: {exc}")
+            continue
+        for result in results:
+            url = str(result.get("url", "") or "")
+            if not url.startswith("http") or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            score = book_search_score(result, topic)
+            if score < 2:
+                continue
+            candidates.append((score, result))
+
+    selected = []
+    seen_books = set()
+    for score, result in sorted(candidates, key=lambda item: item[0], reverse=True)[:8]:
+        identity = book_title_identity(str(result.get("title", "") or ""))
+        if not identity or identity in seen_books:
+            continue
+        page_text = strip_indent(str(result.get("excerpt", "") or ""))
+        if not page_text:
+            page_html = fetch_url_text(result["url"], timeout=6, limit=180000)
+            page_text = html_to_text(page_html)
+        if not page_text:
+            continue
+        if not any(marker in page_text for marker in ("出版社", "ISBN", "书号", "目录", "内容简介")):
+            continue
+        selected.append(
+            {
+                "title": short_text(result.get("title", ""), 160),
+                "url": result.get("url", ""),
+                "excerpt": short_text(page_text, 1800),
+                "sourceScore": score,
+            }
+        )
+        seen_books.add(identity)
+        if len(selected) >= 6:
+            break
+    runtime_log(f"book-search complete title={title} candidates={len(selected)}")
+    return selected
 
 
 def compact_facts(facts: dict) -> dict:
@@ -930,9 +1082,13 @@ def build_bpm_topic(facts: dict, result: dict) -> dict:
         result.get("title", ""),
         "选题策划报告",
     )
-    brief = first_non_empty(field_value(facts, "内容简介"), content)
-    reader = first_non_empty(field_value(facts, "读者 对象", "读者对象", "读者定位"), marketing)
-    bpm_fields = result.get("bpmFields") or result.get("bpm_fields") or {}
+    bpm_fields = normalize_bpm_fields(result.get("bpmFields") or result.get("bpm_fields"))
+    brief = first_non_empty(bpm_fields.get("brief", ""), field_value(facts, "内容简介"), content)
+    reader = first_non_empty(
+        bpm_fields.get("reader", ""),
+        field_value(facts, "读者 对象", "读者对象", "读者定位"),
+        marketing,
+    )
     feature = first_non_empty(bpm_fields.get("feature", ""), field_value(facts, "本教材特色和优势", "特色和优势"), content)
     compare = first_non_empty(bpm_fields.get("compare", ""), field_value(facts, "国内外同类教材比较", "同类教材比较"), marketing)
     author_name = extract_author_name_from_facts(facts)
@@ -957,6 +1113,7 @@ def build_bpm_topic(facts: dict, result: dict) -> dict:
         "reader": short_text(reader),
         "feature": short_text(feature),
         "compare": short_text(compare),
+        "compareSources": bpm_fields.get("compareSources", []),
         "scriptDate": normalize_bpm_date(field_value(facts, "预定交稿时间", "交稿日期"), today + timedelta(days=90)),
         "makingDate": normalize_bpm_date(field_value(facts, "预计发稿日期"), today + timedelta(days=150)),
         "publishDate": normalize_bpm_date(field_value(facts, "预计出版日期", "出版日期"), today + timedelta(days=270)),
@@ -967,7 +1124,7 @@ def build_bpm_topic(facts: dict, result: dict) -> dict:
 
 def merge_bpm_topic(payload: dict) -> dict:
     topic = dict(payload.get("bpmTopic") or {})
-    bpm_fields = payload.get("bpmFields") or payload.get("bpm_fields") or {}
+    bpm_fields = normalize_bpm_fields(payload.get("bpmFields") or payload.get("bpm_fields"))
     editor_name = editor_name_from_payload(payload)
     topic.update(BPM_FIXED_CLASSIFICATION)
     topic["class3"] = first_non_empty(str(topic.get("class3", "")), "020101")
@@ -982,10 +1139,17 @@ def merge_bpm_topic(payload: dict) -> dict:
     for identity_key in ("projectEditorNo", "projectEditorUid", "editorNo", "editorUid"):
         topic.pop(identity_key, None)
     sections = {section.get("key"): strip_indent(section.get("text", "")) for section in payload.get("sections", [])}
-    topic["brief"] = short_text(first_non_empty(topic.get("brief", ""), sections.get("content", "")))
-    topic["reader"] = short_text(first_non_empty(topic.get("reader", ""), sections.get("marketing", "")))
+    topic["brief"] = short_text(
+        first_non_empty(bpm_fields.get("brief", ""), topic.get("brief", ""), sections.get("content", ""))
+    )
+    topic["reader"] = short_text(
+        first_non_empty(bpm_fields.get("reader", ""), topic.get("reader", ""), sections.get("marketing", ""))
+    )
     topic["feature"] = short_text(first_non_empty(bpm_fields.get("feature", ""), topic.get("feature", ""), sections.get("content", "")))
     topic["compare"] = short_text(first_non_empty(bpm_fields.get("compare", ""), topic.get("compare", ""), sections.get("marketing", "")))
+    topic["compareSources"] = bpm_fields.get("compareSources") or normalize_compare_sources(
+        topic.get("compareSources")
+    )
     if isinstance(topic.get("authorMaintenance"), dict):
         topic["authorMaintenance"]["contactor"] = editor_name
         topic["authorMaintenance"].pop("contactorUid", None)
@@ -1470,10 +1634,15 @@ def normalize_model_url(url: str) -> str:
     return url
 
 
-def build_prompt(facts: dict) -> str:
+def build_prompt(facts: dict, book_context: list[dict] | None = None) -> str:
     report_rules = read_text(REPORT_RULES)
     scoring_rules = read_text(SCORING_RULES)
-    source = json.dumps(compact_facts(facts), ensure_ascii=False, indent=2)
+    compact = compact_facts(facts)
+    if book_context is None:
+        book_context = book_comparison_search_context(facts)
+    if book_context:
+        compact["book_comparison_search_context"] = book_context
+    source = json.dumps(compact, ensure_ascii=False, indent=2)
     return f"""
 你是电子工业出版社教育出版板块的资深策划编辑。请严格依据申报表事实和下方 skill 规则，生成供出版社领导审议的选题策划报告一到六部分、建议评分和待确认信息。报告用于论证选题的出版价值和实施可行性，帮助领导判断是否批准立项。
 
@@ -1487,9 +1656,13 @@ def build_prompt(facts: dict) -> str:
 	6. 一到六正文只写来源能够支持的事实与合理判断。某项信息缺失时，直接略去，不得在正文中写“申报表未提供”“申报表中没有体现”“目前尚不明确”“缺少相关依据”“有待进一步确认”等缺项说明。
 	7. 一到六正文用于论证“为什么值得出版、现有基础为什么能够支撑实施”，不得向责任编辑、策划编辑或作者布置工作，不得出现“建议责任编辑”“建议在组稿阶段”“建议后续跟进”“建议进一步确认”“不建议在论证中强调”“待作者补充后再”等内部工作指令。
 	8. BPM 填报分类中，一级分类固定为“教育”，二级分类固定为“本科研究生”，国标分类固定为“G”，层次固定为“高等理工”；你只需要根据选题内容理解，给出最合适的三级分类和四级分类建议，可填 BPM 下拉框文本或代码，不确定则留空。
-	9. 额外生成 BPM 填报专用字段：
-	   - `bpmFields.feature` 是“选题特色”，按“内容范围、写作特点、实践教学、教学资源建设、其他特点”五项写，每项 1 句，适合直接填入 BPM 文本框。
-	   - `bpmFields.compare` 是“同类选题比较”，如果申报表已有同类选题比较则提炼改写；如果没有，则依据选题定位生成一段谨慎的同类教材/同类选题比较，避免编造具体销量、排名、精确市场数据。
+	9. 额外生成四个 BPM 填报专用字段，它们不是策划报告正文摘要，不得直接复制第一部分或第六部分：
+	   - `bpmFields.brief` 是“内容简介”，用 250-400 字说明本书讲什么、按什么逻辑组织、读者能够获得什么能力。只写书稿内容，不写市场宣传、编辑建议或缺项说明。
+	   - `bpmFields.reader` 是“读者对象”，只写一句“本书适合大学XXX专业本科生、研究生，以及从事XXX相关工作的人员使用。”根据选题选择专业和相关工作，不加入高职学生、继续教育学员等额外人群。
+	   - `bpmFields.feature` 是“选题特色”，用 250-400 字说明内容体系、教材组织、实践教学和行业前沿价值，回答为什么本书值得出版；不写“建议责任编辑”“后续补充”等内部工作意见。
+	   - `bpmFields.compare` 是“同类选题比较”。只能从 `book_comparison_search_context` 中恰好选择 2 本可核验的真实图书，逐本按“书名（作者，出版社，年份）—优点—相较本选题的覆盖差异”写，末尾总结本选题的差异化定位。所谓不足只能写成基于公开简介和目录的相对覆盖差异，不得评价写作质量，不得编造销量、排名或市场数据。
+	   - `bpmFields.compareSources` 恰好保存上述 2 本书的来源信息，至少包含 `title` 和 `url`；书名及网址必须来自 `book_comparison_search_context`，不得自行生成网址。来源网址只供后台追溯，不要写进 `compare` 正文。
+	   - 如果联网检索得到的可核验图书不足 2 本，`compare` 和 `compareSources` 留空，不得用模型记忆虚构书目。
 	10. 额外生成 `authorMaintenance.bio`：如果申报表已有作者简介则提炼为 50-1000 字；如果没有作者简介但 `author_official_search_context` 中有学校/学院/单位官网摘要，则优先依据这些公开摘要和申报表事实写作者简介；如果两者都不足，则只根据申报表中作者单位、职称、学历、研究/教学经历、项目、获奖、著作等已知事实，写一段可用于 BPM 作译者维护的作者简介。不得编造精确头衔、项目名称、获奖名称或联系方式。作者姓名不要从“作者情况”正文推断；如申报表没有独立姓名字段但有“合作者情况简介（姓名、年龄、职称、工作单位等）”，以该栏首位作者姓名为准。
 	11. 评分按保守口径，总分通常控制在 60-70；除非材料非常强，不要超过 70。
 	12. 输出字段必须符合下面 JSON 结构：
@@ -1512,11 +1685,17 @@ def build_prompt(facts: dict) -> str:
     ["市场定位与营销", 10, 8]
   ],
   "pending_questions": ["..."],
-  "bpmClassification": {{"class3": "三级分类建议", "class4": "四级分类建议"}},
-  "bpmFields": {{
-    "feature": "内容范围：...\\n写作特点：...\\n实践教学：...\\n教学资源建设：...\\n其他特点：...",
-    "compare": "同类选题比较..."
-  }},
+	  "bpmClassification": {{"class3": "三级分类建议", "class4": "四级分类建议"}},
+	  "bpmFields": {{
+	    "brief": "250-400字内容简介",
+	    "reader": "本书适合大学XXX专业本科生、研究生，以及从事XXX相关工作的人员使用。",
+	    "feature": "250-400字选题特色",
+	    "compare": "两本真实图书的逐本比较及本选题差异化定位",
+	    "compareSources": [
+	      {{"title": "第一本书名", "url": "来源网址", "author": "作者", "publisher": "出版社", "year": "年份"}},
+	      {{"title": "第二本书名", "url": "来源网址", "author": "作者", "publisher": "出版社", "year": "年份"}}
+	    ]
+	  }},
   "authorMaintenance": {{
     "bio": "作者简介，50-1000字"
   }}
@@ -1836,6 +2015,45 @@ def recover_missing_structured_fields(facts: dict) -> dict:
     return recovered
 
 
+def normalize_compare_sources(items) -> list[dict]:
+    sources = []
+    seen = set()
+    for item in items if isinstance(items, list) else []:
+        if not isinstance(item, dict):
+            continue
+        title = strip_indent(str(item.get("title", "") or ""))
+        url = strip_indent(str(item.get("url", "") or ""))
+        identity = book_title_identity(title)
+        if not title or not url.startswith(("http://", "https://")) or not identity or identity in seen:
+            continue
+        seen.add(identity)
+        sources.append(
+            {
+                "title": title,
+                "url": url,
+                "author": strip_indent(str(item.get("author", "") or "")),
+                "publisher": strip_indent(str(item.get("publisher", "") or "")),
+                "year": strip_indent(str(item.get("year", "") or "")),
+            }
+        )
+        if len(sources) >= 2:
+            break
+    return sources
+
+
+def normalize_bpm_fields(value: dict | None) -> dict:
+    fields = value if isinstance(value, dict) else {}
+    return {
+        "brief": strip_indent(str(fields.get("brief", "") or "")),
+        "reader": strip_indent(str(fields.get("reader", "") or "")),
+        "feature": strip_indent(str(fields.get("feature", "") or "")),
+        "compare": strip_indent(str(fields.get("compare", "") or "")),
+        "compareSources": normalize_compare_sources(
+            fields.get("compareSources") or fields.get("compare_sources") or []
+        ),
+    }
+
+
 def normalize_generated(result: dict) -> dict:
     sections = []
     section_map = {section.get("key"): section for section in result.get("sections", [])}
@@ -1871,7 +2089,7 @@ def normalize_generated(result: dict) -> dict:
         scores.append([name, max_score, value])
     total = sum(item[2] for item in scores)
     bpm_classification = result.get("bpmClassification") or result.get("bpm_classification") or {}
-    bpm_fields = result.get("bpmFields") or result.get("bpm_fields") or {}
+    bpm_fields = normalize_bpm_fields(result.get("bpmFields") or result.get("bpm_fields"))
     author_maintenance = result.get("authorMaintenance") or result.get("author_maintenance") or {}
     return {
         "title": result.get("title") or "选题策划报告",
@@ -1883,14 +2101,86 @@ def normalize_generated(result: dict) -> dict:
             "class3": str(bpm_classification.get("class3", "") or "").strip(),
             "class4": str(bpm_classification.get("class4", "") or "").strip(),
         },
-        "bpmFields": {
-            "feature": str(bpm_fields.get("feature", "") or "").strip(),
-            "compare": str(bpm_fields.get("compare", "") or "").strip(),
-        },
+        "bpmFields": bpm_fields,
         "authorMaintenance": {
             "bio": str(author_maintenance.get("bio", "") or "").strip() if isinstance(author_maintenance, dict) else "",
         },
     }
+
+
+def validate_bpm_field_sources(fields: dict, book_context: list[dict]) -> dict:
+    normalized = normalize_bpm_fields(fields)
+    allowed = {
+        str(item.get("url", "") or ""): item
+        for item in book_context
+        if isinstance(item, dict) and str(item.get("url", "") or "").startswith(("http://", "https://"))
+    }
+    verified = []
+    for source in normalized["compareSources"]:
+        context_item = allowed.get(source["url"])
+        if context_item is None:
+            continue
+        verified.append(source)
+    normalized["compareSources"] = verified[:2]
+    if len(normalized["compareSources"]) != 2:
+        normalized["compare"] = ""
+        normalized["compareSources"] = []
+    return normalized
+
+
+def build_dedicated_bpm_fields_prompt(
+    facts: dict, report: dict, book_context: list[dict]
+) -> str:
+    source = compact_facts(facts)
+    source["book_comparison_search_context"] = book_context
+    report_sections = [
+        {
+            "key": str(section.get("key", "") or ""),
+            "text": strip_indent(str(section.get("text", "") or "")),
+        }
+        for section in report.get("sections", [])
+        if isinstance(section, dict)
+    ]
+    return f"""
+你是电子工业出版社教育出版板块的资深策划编辑。请根据申报表事实、已确认的策划报告和联网检索候选图书，单独生成 BPM 所需的四项内容。只输出严格 JSON。
+
+规则：
+1. `brief`：250-400 字，说明本书讲什么、内容组织逻辑和读者能够获得的能力，不得直接复制策划报告第一部分。
+2. `reader`：只写一句“本书适合大学XXX专业本科生、研究生，以及从事XXX相关工作的人员使用。”
+3. `feature`：250-400 字，说明内容体系、教材组织、实践教学和行业前沿价值，不写编辑工作建议。
+4. `compare`：只能从候选图书中恰好选择 2 本，逐本写书名、作者、出版社、年份、优点和相较本选题的覆盖差异，末尾总结本选题差异化定位。不得编造销量、排名和质量评价。
+5. `compareSources`：恰好保存上述 2 本书的 `title`、`url`、`author`、`publisher`、`year`，其中 `url` 必须原样取自候选图书。
+6. 候选图书不足 2 本时，`compare` 留空且 `compareSources` 输出空数组，不得凭模型记忆补书。
+7. 信息缺失时直接略去，不写“申报表没有”“尚未提供”等缺项说明。
+
+输出结构：
+{{
+  "bpmFields": {{
+    "brief": "...",
+    "reader": "...",
+    "feature": "...",
+    "compare": "...",
+    "compareSources": [
+      {{"title": "...", "url": "...", "author": "...", "publisher": "...", "year": "..."}},
+      {{"title": "...", "url": "...", "author": "...", "publisher": "...", "year": "..."}}
+    ]
+  }}
+}}
+
+【申报表事实及候选图书】
+{json.dumps(source, ensure_ascii=False, indent=2)}
+
+【已确认策划报告】
+{json.dumps(report_sections, ensure_ascii=False, indent=2)}
+""".strip()
+
+
+def generate_dedicated_bpm_fields(facts: dict, report: dict) -> dict:
+    book_context = book_comparison_search_context(facts)
+    prompt = build_dedicated_bpm_fields_prompt(facts, report, book_context)
+    generated = call_complete_report_model(prompt)
+    raw_fields = generated.get("bpmFields") or generated.get("bpm_fields") or generated
+    return validate_bpm_field_sources(raw_fields, book_context)
 
 
 def parse_score(value: str, default: int = 0) -> int:
@@ -2039,10 +2329,7 @@ def extract_planning_report_docx(path: Path) -> dict:
     if not extracted:
         raise ValueError("没有从选题策划报告中识别到一到六部分内容，请确认上传的是选题策划报告 DOCX。")
     section_map = {section["key"]: section for section in extracted["sections"]}
-    extracted["bpmFields"] = {
-        "feature": strip_indent(section_map.get("content", {}).get("text", "")),
-        "compare": strip_indent(section_map.get("marketing", {}).get("text", "")),
-    }
+    extracted["bpmFields"] = normalize_bpm_fields({})
     extracted["authorMaintenance"] = {"bio": strip_indent(section_map.get("author", {}).get("text", ""))}
     return extracted
 
@@ -2072,7 +2359,7 @@ def import_bpm_sources(application_bytes: bytes, application_name: str, report_b
         )
         for section in normalized["sections"]:
             section["confirmed"] = True
-        normalized["bpmFields"] = report.get("bpmFields", normalized.get("bpmFields", {}))
+        normalized["bpmFields"] = generate_dedicated_bpm_fields(facts, normalized)
         normalized["authorMaintenance"] = report.get("authorMaintenance", normalized.get("authorMaintenance", {}))
         normalized["bpmTopic"] = build_bpm_topic(facts, normalized)
         normalized["sourceMode"] = "application-plus-report"
@@ -2097,9 +2384,14 @@ def generate_report_from_upload(file_bytes: bytes, filename: str) -> dict:
         extractor = load_extractor()
         facts = extractor.build_payload(tmp_path, include_sensitive=False)
         facts = recover_missing_structured_fields(facts)
-        prompt = build_prompt(facts)
+        book_context = book_comparison_search_context(facts)
+        prompt = build_prompt(facts, book_context)
         result = call_complete_report_model(prompt)
         result = revise_report_tone_if_needed(facts, result)
+        result["bpmFields"] = validate_bpm_field_sources(
+            result.get("bpmFields") or result.get("bpm_fields") or {},
+            book_context,
+        )
         normalized = normalize_generated(result)
         normalized["title"] = first_non_empty(
             field_value(facts, "教材名称", "选题名称", "选题名", "书名"),

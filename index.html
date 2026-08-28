@@ -3933,8 +3933,13 @@
       }
       bpmTopic = data.bpmTopic || data.project?.state?.bpmTopic || null;
       if (bpmTopic && data.bpmFields) {
+        bpmTopic.brief = data.bpmFields.brief || bpmTopic.brief;
+        bpmTopic.reader = data.bpmFields.reader || bpmTopic.reader;
         bpmTopic.feature = data.bpmFields.feature || bpmTopic.feature;
         bpmTopic.compare = data.bpmFields.compare || bpmTopic.compare;
+        bpmTopic.compareSources = Array.isArray(data.bpmFields.compareSources)
+          ? data.bpmFields.compareSources
+          : (bpmTopic.compareSources || []);
       }
       renderAuthorStatus(data.authorMaintenance || bpmTopic?.authorMaintenance || data.project?.state?.authorMaintenance || null);
       renderBpmPreview();
