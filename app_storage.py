@@ -26,6 +26,7 @@ PROJECT_AUTHOR_STATUSES = {"unknown", "ready", "queued", "running", "succeeded",
 PROJECT_BPM_STATUSES = {"not_ready", "ready", "queued", "running", "succeeded", "failed"}
 PROJECT_FILE_KINDS = {"application", "confirmed_report", "exported_report", "bpm_evidence"}
 INTERRUPTED_JOB_ERROR = "服务重启，任务执行状态不确定，请先在 BPM 人工核对后再重试"
+INTERRUPTED_MAIL_ERROR = "服务重启，邮件是否已发出无法确认，请先人工核对发件箱和发送记录，避免重复发送"
 JOB_RESERVED_PAYLOAD_KEYS = {
     "id",
     "type",
@@ -330,6 +331,18 @@ class AppStore:
             connection.execute(
                 "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
                 (7, int(time.time())),
+            )
+            mail_batch_columns = {
+                row["name"]
+                for row in connection.execute("PRAGMA table_info(mail_batches)").fetchall()
+            }
+            if "interruption_warning" not in mail_batch_columns:
+                connection.execute(
+                    "ALTER TABLE mail_batches ADD COLUMN interruption_warning TEXT"
+                )
+            connection.execute(
+                "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                (8, int(time.time())),
             )
 
     @staticmethod
@@ -735,6 +748,7 @@ class AppStore:
             "startedAt": cls._format_mail_batch_timestamp(row["started_at"]),
             "finishedAt": cls._format_mail_batch_timestamp(row["finished_at"]),
             "updatedAt": cls._format_mail_batch_timestamp(row["updated_at"]),
+            "interruptionWarning": row["interruption_warning"],
             "deliveries": deliveries,
         }
 
@@ -956,6 +970,55 @@ class AppStore:
                 for row in failed_rows
             ],
         )
+
+    def mark_interrupted_mail_batches_failed(self) -> int:
+        now = self._job_timestamp()
+        with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            active_rows = connection.execute(
+                "SELECT id FROM mail_batches WHERE status IN ('queued', 'running')"
+            ).fetchall()
+            if not active_rows:
+                return 0
+            active_ids = [row["id"] for row in active_rows]
+            placeholders = ",".join("?" for _ in active_ids)
+            connection.execute(
+                f"""
+                UPDATE mail_deliveries
+                SET status = 'failed', error_summary = ?, updated_at = ?
+                WHERE batch_id IN ({placeholders}) AND status IN ('queued', 'sending')
+                """,
+                (INTERRUPTED_MAIL_ERROR, now, *active_ids),
+            )
+            for batch_id in active_ids:
+                counts = connection.execute(
+                    """
+                    SELECT
+                        SUM(CASE WHEN status = 'succeeded' THEN 1 ELSE 0 END) AS sent_count,
+                        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed_count
+                    FROM mail_deliveries WHERE batch_id = ?
+                    """,
+                    (batch_id,),
+                ).fetchone()
+                sent_count = counts["sent_count"] or 0
+                failed_count = counts["failed_count"] or 0
+                connection.execute(
+                    """
+                    UPDATE mail_batches
+                    SET status = 'failed', sent_count = ?, failed_count = ?,
+                        interruption_warning = ?, updated_at = ?, finished_at = ?
+                    WHERE id = ? AND status IN ('queued', 'running')
+                    """,
+                    (
+                        sent_count,
+                        failed_count,
+                        INTERRUPTED_MAIL_ERROR,
+                        now,
+                        now,
+                        batch_id,
+                    ),
+                )
+        return len(active_ids)
 
     def _credential_key(self) -> bytes:
         if not isinstance(self.credential_key, str) or not self.credential_key:

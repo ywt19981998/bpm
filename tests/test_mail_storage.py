@@ -308,6 +308,55 @@ class MailBatchStorageTests(unittest.TestCase):
         self.assertEqual(final["status"], "succeeded")
         self.assertEqual(final["deliveries"][0]["status"], "succeeded")
 
+    def test_restart_marks_queued_and_running_batches_failed_with_manual_warning(self):
+        queued = self.store.create_mail_batch(
+            self.user_id, "尚未启动", "正文", self._deliveries()[:1]
+        )
+        running = self.store.create_mail_batch(
+            self.user_id, "已经启动", "正文", self._deliveries()
+        )
+        all_sent = self.store.create_mail_batch(
+            self.user_id, "已发完但未收口", "正文", self._deliveries()[:1]
+        )
+        self.store.start_mail_batch(self.user_id, running["id"])
+        sent, uncertain = running["deliveries"]
+        self.store.update_mail_delivery(
+            self.user_id, running["id"], sent["id"], "sending"
+        )
+        self.store.update_mail_delivery(
+            self.user_id, running["id"], sent["id"], "succeeded"
+        )
+        self.store.update_mail_delivery(
+            self.user_id, running["id"], uncertain["id"], "sending"
+        )
+        self.store.start_mail_batch(self.user_id, all_sent["id"])
+        all_sent_delivery = all_sent["deliveries"][0]
+        self.store.update_mail_delivery(
+            self.user_id, all_sent["id"], all_sent_delivery["id"], "sending"
+        )
+        self.store.update_mail_delivery(
+            self.user_id, all_sent["id"], all_sent_delivery["id"], "succeeded"
+        )
+
+        recovered = self.store.mark_interrupted_mail_batches_failed()
+
+        self.assertEqual(recovered, 3)
+        queued_result = self.store.get_mail_batch(self.user_id, queued["id"])
+        self.assertEqual(queued_result["status"], "failed")
+        self.assertEqual(queued_result["failedCount"], 1)
+        self.assertIn("人工核对", queued_result["interruptionWarning"])
+        running_result = self.store.get_mail_batch(self.user_id, running["id"])
+        self.assertEqual(running_result["status"], "failed")
+        self.assertEqual(running_result["sentCount"], 1)
+        self.assertEqual(running_result["failedCount"], 1)
+        self.assertIn("人工核对", running_result["interruptionWarning"])
+        self.assertEqual(running_result["deliveries"][1]["status"], "failed")
+        all_sent_result = self.store.get_mail_batch(self.user_id, all_sent["id"])
+        self.assertEqual(all_sent_result["status"], "failed")
+        self.assertEqual(all_sent_result["sentCount"], 1)
+        self.assertEqual(all_sent_result["failedCount"], 0)
+        self.assertIn("人工核对", all_sent_result["interruptionWarning"])
+
 
 if __name__ == "__main__":
     unittest.main()

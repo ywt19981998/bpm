@@ -31,6 +31,14 @@ from docx import Document
 from dotenv import load_dotenv
 
 from app_storage import AppStore, ProjectVersionConflict
+from mail_center import (
+    normalize_smtp_settings,
+    parse_recipient_file,
+    render_mail_text,
+    send_smtp_message,
+    test_smtp_connection,
+    validate_mail_compose,
+)
 from project_domain import (
     build_bpm_preflight,
     normalize_project_state,
@@ -58,6 +66,7 @@ PROJECT_FILE_STORE = ProjectFileStore(
     Path(os.environ.get("PHEI_PROJECTS_PATH", ROOT / "data" / "projects"))
 )
 APP_STORE.mark_interrupted_jobs_failed()
+APP_STORE.mark_interrupted_mail_batches_failed()
 SESSION_COOKIE_NAME = "phei_session"
 STATIC_ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -74,6 +83,22 @@ PROJECT_API_RE = re.compile(
     r"^/api/projects/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"
     r"(?:/(preflight|archive|files)(?:/([A-Za-z0-9_-]{1,128}))?)?$"
 )
+MAIL_TEMPLATE_API_RE = re.compile(r"^/api/mail/templates/([0-9a-f]{12})$")
+MAIL_BATCH_API_RE = re.compile(r"^/api/mail/batches/([0-9a-f]{12})(?:/(retry))?$")
+DEFAULT_MAIL_TEMPLATES = [
+    {
+        "name": "教材合作邀请",
+        "subject": "诚邀您参与《教材名称》教材建设",
+        "body": "{{姓名}}老师，您好！\n\n我们正在开展教材建设工作，诚邀您参与。\n\n此致\n敬礼！",
+    },
+    {
+        "name": "材料提醒",
+        "subject": "《教材名称》材料提交提醒",
+        "body": "{{姓名}}老师，您好！\n\n烦请您在方便时查看并提交相关材料。\n\n谢谢！",
+    },
+]
+MAX_MAIL_RECIPIENTS = 1000
+MAX_MAIL_RECIPIENT_FILE_BYTES = 10 * 1024 * 1024
 
 
 class MultipartForm:
@@ -2406,6 +2431,174 @@ def generate_report_from_upload(file_bytes: bytes, filename: str) -> dict:
             pass
 
 
+def mask_mail_identity(value: str) -> str | None:
+    value = str(value or "").strip()
+    if not value:
+        return None
+    if "@" in value:
+        local, domain = value.split("@", 1)
+        visible = local[:1]
+        return f"{visible}{'*' * max(3, len(local) - 1)}@{domain}"
+    if len(value) <= 2:
+        return "*" * len(value)
+    return f"{value[0]}{'*' * max(3, len(value) - 2)}{value[-1]}"
+
+
+def public_smtp_status(user_id: int) -> dict:
+    settings = APP_STORE.get_integration_secret(user_id, "smtp")
+    if settings is None:
+        return {"configured": False, "accountMasked": None}
+    normalized = normalize_smtp_settings(settings)
+    return {
+        "configured": True,
+        "accountMasked": mask_mail_identity(normalized["account"]),
+        "fromAddressMasked": mask_mail_identity(normalized["fromAddress"]),
+        "host": normalized["host"],
+        "port": normalized["port"],
+        "security": normalized["security"],
+        "fromName": normalized["fromName"],
+    }
+
+
+def safe_mail_error(error: Exception, settings: dict | None = None) -> str:
+    known_secrets = []
+    if isinstance(settings, dict):
+        password = settings.get("password")
+        if isinstance(password, str) and password:
+            known_secrets.append(password)
+    summary = APP_STORE.sanitize_job_data(
+        f"{type(error).__name__}: {error}", known_secrets=known_secrets
+    )
+    return str(summary).strip()[:500] or "邮件发送失败"
+
+
+def normalize_mail_recipients(recipients) -> list[dict]:
+    if not isinstance(recipients, list):
+        raise ValueError("收件人名单必须是数组")
+    if len(recipients) > MAX_MAIL_RECIPIENTS:
+        raise ValueError(f"单次最多发送 {MAX_MAIL_RECIPIENTS} 封邮件")
+    normalized = []
+    seen = set()
+    for recipient in recipients:
+        if not isinstance(recipient, dict):
+            raise ValueError("收件人信息必须是对象")
+        record = {
+            str(key): "" if value is None else str(value).strip()
+            for key, value in recipient.items()
+            if isinstance(key, str)
+        }
+        record["name"] = str(recipient.get("name") or "").strip()
+        record["email"] = str(recipient.get("email") or "").strip()
+        email_key = record["email"].casefold()
+        if email_key and email_key in seen:
+            raise ValueError(f"收件人邮箱重复：{record['email']}")
+        if email_key:
+            seen.add(email_key)
+        normalized.append(record)
+    errors = validate_mail_compose("待生成主题", "待生成正文", normalized)
+    if errors:
+        raise ValueError("；".join(dict.fromkeys(errors)))
+    return normalized
+
+
+def render_mail_deliveries(subject: str, body: str, recipients) -> list[dict]:
+    if not isinstance(subject, str) or not isinstance(body, str):
+        raise ValueError("邮件主题和正文必须是文本")
+    normalized = normalize_mail_recipients(recipients)
+    errors = validate_mail_compose(subject, body, normalized)
+    if errors:
+        raise ValueError("；".join(dict.fromkeys(errors)))
+    rendered = []
+    for recipient in normalized:
+        variables = dict(recipient)
+        variables.setdefault("姓名", recipient["name"])
+        variables.setdefault("邮箱", recipient["email"])
+        rendered_subject = render_mail_text(subject, variables).strip()
+        rendered_body = render_mail_text(body, variables)
+        rendered_errors = validate_mail_compose(
+            rendered_subject, rendered_body, [recipient]
+        )
+        if rendered_errors:
+            raise ValueError("；".join(dict.fromkeys(rendered_errors)))
+        rendered.append(
+            {
+                "name": recipient["name"],
+                "email": recipient["email"],
+                "subject": rendered_subject,
+                "body": rendered_body,
+            }
+        )
+    return rendered
+
+
+def fail_unfinished_mail_batch(
+    user_id: int, batch_id: str, error: Exception, settings: dict | None = None
+) -> None:
+    batch = APP_STORE.get_mail_batch(user_id, batch_id)
+    if batch is None or batch["status"] != "running":
+        return
+    error_summary = safe_mail_error(error, settings)
+    for delivery in batch["deliveries"]:
+        if delivery["status"] == "queued":
+            APP_STORE.update_mail_delivery(
+                user_id, batch_id, delivery["id"], "sending"
+            )
+            APP_STORE.update_mail_delivery(
+                user_id, batch_id, delivery["id"], "failed", error_summary
+            )
+        elif delivery["status"] == "sending":
+            APP_STORE.update_mail_delivery(
+                user_id, batch_id, delivery["id"], "failed", error_summary
+            )
+    APP_STORE.finish_mail_batch(user_id, batch_id)
+
+
+def process_mail_batch(batch_id: str, user_id: int):
+    settings = {}
+    batch = None
+    try:
+        settings = APP_STORE.get_integration_secret(user_id, "smtp") or {}
+        batch = APP_STORE.start_mail_batch(user_id, batch_id)
+        if batch is None:
+            return
+        normalized_settings = normalize_smtp_settings(settings)
+        settings.clear()
+        settings.update(normalized_settings)
+        for delivery in batch["deliveries"]:
+            APP_STORE.update_mail_delivery(
+                user_id, batch_id, delivery["id"], "sending"
+            )
+            try:
+                send_smtp_message(settings, delivery)
+                APP_STORE.update_mail_delivery(
+                    user_id, batch_id, delivery["id"], "succeeded"
+                )
+            except Exception as error:
+                APP_STORE.update_mail_delivery(
+                    user_id,
+                    batch_id,
+                    delivery["id"],
+                    "failed",
+                    safe_mail_error(error, settings),
+                )
+        APP_STORE.finish_mail_batch(user_id, batch_id)
+    except Exception as error:
+        if batch is not None:
+            fail_unfinished_mail_batch(user_id, batch_id, error, settings)
+        runtime_log(
+            f"mail-batch failure batch={batch_id} type={type(error).__name__}"
+        )
+    finally:
+        if isinstance(settings, dict):
+            settings.clear()
+
+
+def schedule_mail_batch(batch_id: str, user_id: int) -> None:
+    threading.Thread(
+        target=process_mail_batch, args=(batch_id, user_id), daemon=True
+    ).start()
+
+
 class Handler(BaseHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
@@ -2548,6 +2741,268 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"configured": False, "accountMasked": None})
         except ValueError as error:
             self.send_json(400, {"error": str(error), "code": "INTEGRATION_CONFIGURATION_ERROR"})
+
+    def handle_smtp_integration_get(self, user: dict):
+        try:
+            self.send_json(200, public_smtp_status(user["id"]))
+        except ValueError as error:
+            self.send_json(
+                400, {"error": str(error), "code": "SMTP_CONFIGURATION_ERROR"}
+            )
+
+    def handle_smtp_integration_put(self, user: dict):
+        try:
+            settings = normalize_smtp_settings(self.read_json())
+            APP_STORE.put_integration_secret(user["id"], "smtp", settings)
+            self.send_json(200, public_smtp_status(user["id"]))
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(400, {"error": str(error), "code": "SMTP_INVALID_INPUT"})
+
+    def handle_smtp_integration_delete(self, user: dict):
+        try:
+            APP_STORE.delete_integration_credentials(user["id"], "smtp")
+            self.send_json(200, {"configured": False, "accountMasked": None})
+        except ValueError as error:
+            self.send_json(
+                400, {"error": str(error), "code": "SMTP_CONFIGURATION_ERROR"}
+            )
+
+    def handle_smtp_test(self, user: dict):
+        settings = {}
+        try:
+            settings = APP_STORE.get_integration_secret(user["id"], "smtp") or {}
+            if not settings:
+                self.send_json(
+                    400,
+                    {"error": "请先保存 SMTP 配置。", "code": "SMTP_NOT_CONFIGURED"},
+                )
+                return
+            test_smtp_connection(settings)
+            self.send_json(200, {"ok": True})
+        except Exception as error:
+            self.send_json(
+                400,
+                {"error": safe_mail_error(error, settings), "code": "SMTP_TEST_FAILED"},
+            )
+        finally:
+            if isinstance(settings, dict):
+                settings.clear()
+
+    def handle_mail_templates_list(self, user: dict):
+        templates = APP_STORE.ensure_default_mail_templates(
+            user["id"], DEFAULT_MAIL_TEMPLATES
+        )
+        self.send_json(200, {"templates": templates})
+
+    def handle_mail_template_create(self, user: dict):
+        try:
+            payload = self.read_json()
+            template = APP_STORE.create_mail_template(
+                user["id"],
+                payload.get("name"),
+                payload.get("subject"),
+                payload.get("body"),
+            )
+            self.send_json(201, {"template": template})
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(
+                400, {"error": str(error), "code": "MAIL_TEMPLATE_INVALID"}
+            )
+
+    def handle_mail_template_update(self, user: dict, template_id: str):
+        try:
+            payload = self.read_json()
+            template = APP_STORE.update_mail_template(
+                user["id"],
+                template_id,
+                payload.get("name"),
+                payload.get("subject"),
+                payload.get("body"),
+            )
+            if template is None:
+                self.send_json(
+                    404,
+                    {"error": "未找到邮件模板。", "code": "MAIL_TEMPLATE_NOT_FOUND"},
+                )
+                return
+            self.send_json(200, {"template": template})
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(
+                400, {"error": str(error), "code": "MAIL_TEMPLATE_INVALID"}
+            )
+
+    def handle_mail_template_delete(self, user: dict, template_id: str):
+        if not APP_STORE.delete_mail_template(user["id"], template_id):
+            self.send_json(
+                404,
+                {"error": "未找到邮件模板。", "code": "MAIL_TEMPLATE_NOT_FOUND"},
+            )
+            return
+        self.send_json(200, {"ok": True})
+
+    def handle_mail_draft_get(self, user: dict):
+        self.send_json(200, {"draft": APP_STORE.get_mail_draft(user["id"])})
+
+    def handle_mail_draft_put(self, user: dict):
+        try:
+            payload = self.read_json()
+            APP_STORE.put_mail_draft(user["id"], payload)
+            self.send_json(200, {"draft": APP_STORE.get_mail_draft(user["id"])})
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(400, {"error": str(error), "code": "MAIL_DRAFT_INVALID"})
+
+    def handle_mail_recipient_parse(self, user: dict):
+        try:
+            content_length = int(self.headers.get("Content-Length", "0"))
+            if content_length <= 0 or content_length > MAX_MAIL_RECIPIENT_FILE_BYTES:
+                raise ValueError("名单文件不能为空且不得超过 10 MB")
+            form = read_multipart_form(
+                fp=self.rfile,
+                headers=self.headers,
+                environ={
+                    "REQUEST_METHOD": "POST",
+                    "CONTENT_TYPE": self.headers.get("Content-Type", ""),
+                    "CONTENT_LENGTH": str(content_length),
+                },
+            )
+            file_item = form["file"] if "file" in form else None
+            if file_item is None or not getattr(file_item, "file", None):
+                raise ValueError("请上传 CSV 或 XLSX 名单文件")
+            filename = getattr(file_item, "filename", "recipients.csv")
+            result = parse_recipient_file(file_item.file.read(), filename)
+            self.send_json(200, result)
+        except Exception as error:
+            self.send_json(
+                400,
+                {"error": str(error), "code": "MAIL_RECIPIENT_FILE_INVALID"},
+            )
+
+    def handle_mail_preview(self, user: dict):
+        try:
+            payload = self.read_json()
+            preview = render_mail_deliveries(
+                payload.get("subject"), payload.get("body"), payload.get("recipients")
+            )
+            self.send_json(200, {"preview": preview})
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(
+                400, {"error": str(error), "code": "MAIL_COMPOSE_INVALID"}
+            )
+
+    def handle_mail_batch_list(self, user: dict, parsed_url):
+        try:
+            query = parse_qs(parsed_url.query, keep_blank_values=False)
+            limit = int(query.get("limit", ["30"])[0])
+            if not 1 <= limit <= 100:
+                raise ValueError("查询数量必须在 1—100 之间")
+            self.send_json(
+                200, {"batches": APP_STORE.list_mail_batches(user["id"], limit=limit)}
+            )
+        except (TypeError, ValueError) as error:
+            self.send_json(400, {"error": str(error), "code": "MAIL_BATCH_INVALID"})
+
+    def handle_mail_batch_get(self, user: dict, batch_id: str):
+        batch = APP_STORE.get_mail_batch(user["id"], batch_id)
+        if batch is None:
+            self.send_json(
+                404, {"error": "未找到邮件批次。", "code": "MAIL_BATCH_NOT_FOUND"}
+            )
+            return
+        self.send_json(200, {"batch": batch})
+
+    def require_saved_smtp(self, user: dict) -> dict | None:
+        settings = APP_STORE.get_integration_secret(user["id"], "smtp")
+        if settings is None:
+            self.send_json(
+                400,
+                {"error": "请先保存 SMTP 配置。", "code": "SMTP_NOT_CONFIGURED"},
+            )
+            return None
+        try:
+            return normalize_smtp_settings(settings)
+        except ValueError as error:
+            self.send_json(
+                400, {"error": str(error), "code": "SMTP_CONFIGURATION_ERROR"}
+            )
+            return None
+        finally:
+            settings.clear()
+
+    @staticmethod
+    def payload_contains_mail_secret(payload: dict) -> bool:
+        forbidden = {"password", "smtp", "smtpsettings", "smtpconfig", "authorization"}
+        return any(str(key).casefold() in forbidden for key in payload)
+
+    def handle_mail_batch_create(self, user: dict):
+        try:
+            payload = self.read_json()
+            if self.payload_contains_mail_secret(payload):
+                self.send_json(
+                    400,
+                    {
+                        "error": "发送任务不允许从客户端传入 SMTP 密码。",
+                        "code": "MAIL_CLIENT_SECRET_FORBIDDEN",
+                    },
+                )
+                return
+            if payload.get("confirmed") is not True:
+                self.send_json(
+                    400,
+                    {
+                        "error": "请确认收件人数量和邮件内容后再发送。",
+                        "code": "MAIL_CONFIRMATION_REQUIRED",
+                    },
+                )
+                return
+            settings = self.require_saved_smtp(user)
+            if settings is None:
+                return
+            settings.clear()
+            subject = payload.get("subject")
+            body = payload.get("body")
+            deliveries = render_mail_deliveries(
+                subject, body, payload.get("recipients")
+            )
+            batch = APP_STORE.create_mail_batch(
+                user["id"], subject.strip(), body, deliveries
+            )
+            template_id = payload.get("templateId")
+            if isinstance(template_id, str) and template_id:
+                APP_STORE.touch_mail_template(user["id"], template_id)
+            schedule_mail_batch(batch["id"], user["id"])
+            self.send_json(201, {"batch": batch})
+        except (TypeError, ValueError, json.JSONDecodeError) as error:
+            self.send_json(400, {"error": str(error), "code": "MAIL_BATCH_INVALID"})
+
+    def handle_mail_batch_retry(self, user: dict, batch_id: str):
+        try:
+            payload = self.read_json()
+            if payload.get("confirmed") is not True:
+                self.send_json(
+                    400,
+                    {
+                        "error": "请确认只重试失败邮件。",
+                        "code": "MAIL_CONFIRMATION_REQUIRED",
+                    },
+                )
+                return
+            settings = self.require_saved_smtp(user)
+            if settings is None:
+                return
+            settings.clear()
+            batch = APP_STORE.create_retry_mail_batch(user["id"], batch_id)
+            schedule_mail_batch(batch["id"], user["id"])
+            self.send_json(201, {"batch": batch})
+        except json.JSONDecodeError as error:
+            self.send_json(400, {"error": str(error), "code": "MAIL_BATCH_INVALID"})
+        except ValueError as error:
+            if APP_STORE.get_mail_batch(user["id"], batch_id) is None:
+                self.send_json(
+                    404,
+                    {"error": "未找到邮件批次。", "code": "MAIL_BATCH_NOT_FOUND"},
+                )
+                return
+            self.send_json(400, {"error": str(error), "code": "MAIL_BATCH_INVALID"})
 
     @staticmethod
     def project_api_match(path: str):
@@ -2950,6 +3405,22 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/integrations/phei-bpm":
             self.handle_bpm_integration_get(user)
             return
+        if path == "/api/integrations/smtp":
+            self.handle_smtp_integration_get(user)
+            return
+        if path == "/api/mail/templates":
+            self.handle_mail_templates_list(user)
+            return
+        if path == "/api/mail/draft":
+            self.handle_mail_draft_get(user)
+            return
+        if path == "/api/mail/batches":
+            self.handle_mail_batch_list(user, parsed_url)
+            return
+        mail_batch_match = MAIL_BATCH_API_RE.fullmatch(path)
+        if mail_batch_match and mail_batch_match.group(2) is None:
+            self.handle_mail_batch_get(user, mail_batch_match.group(1))
+            return
         if path == "/api/bpm-jobs":
             self.send_json(200, {"jobs": APP_STORE.list_jobs(user["id"])})
             return
@@ -2982,6 +3453,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/integrations/phei-bpm":
             self.handle_bpm_integration_put(user)
             return
+        if path == "/api/integrations/smtp":
+            self.handle_smtp_integration_put(user)
+            return
+        if path == "/api/mail/draft":
+            self.handle_mail_draft_put(user)
+            return
+        mail_template_match = MAIL_TEMPLATE_API_RE.fullmatch(path)
+        if mail_template_match:
+            self.handle_mail_template_update(user, mail_template_match.group(1))
+            return
         project_match = self.project_api_match(path)
         if project_match and project_match.group(2) is None:
             self.handle_project_update(user, project_match.group(1))
@@ -2995,6 +3476,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/integrations/phei-bpm":
             self.handle_bpm_integration_delete(user)
+            return
+        if path == "/api/integrations/smtp":
+            self.handle_smtp_integration_delete(user)
+            return
+        mail_template_match = MAIL_TEMPLATE_API_RE.fullmatch(path)
+        if mail_template_match:
+            self.handle_mail_template_delete(user, mail_template_match.group(1))
             return
         self.send_error(404)
 
@@ -3014,6 +3502,25 @@ class Handler(BaseHTTPRequestHandler):
             user = self.require_user()
             if not user:
                 return
+        if path == "/api/integrations/smtp/test":
+            self.handle_smtp_test(user)
+            return
+        if path == "/api/mail/templates":
+            self.handle_mail_template_create(user)
+            return
+        if path == "/api/mail/recipients/parse":
+            self.handle_mail_recipient_parse(user)
+            return
+        if path == "/api/mail/preview":
+            self.handle_mail_preview(user)
+            return
+        if path == "/api/mail/batches":
+            self.handle_mail_batch_create(user)
+            return
+        mail_batch_match = MAIL_BATCH_API_RE.fullmatch(path)
+        if mail_batch_match and mail_batch_match.group(2) == "retry":
+            self.handle_mail_batch_retry(user, mail_batch_match.group(1))
+            return
         if path == "/api/projects":
             self.handle_project_create(user)
             return
