@@ -3,7 +3,14 @@ import unittest
 
 from openpyxl import Workbook
 
-from mail_center import parse_recipient_file, render_mail_text, validate_mail_compose
+from mail_center import (
+    normalize_smtp_settings,
+    parse_recipient_file,
+    render_mail_text,
+    send_smtp_message,
+    test_smtp_connection,
+    validate_mail_compose,
+)
 
 
 class MailRecipientTests(unittest.TestCase):
@@ -133,6 +140,108 @@ class MailRecipientTests(unittest.TestCase):
         self.assertEqual(result["invalid"], [])
         self.assertEqual(result["columns"], ["姓名", "邮箱"])
 
+
+class FakeSMTP:
+    def __init__(self):
+        self.login_args = None
+        self.messages = []
+        self.starttls_calls = 0
+        self.quit_calls = 0
+
+    def starttls(self, *, context):
+        self.starttls_calls += 1
+        self.starttls_context = context
+
+    def login(self, account, password):
+        self.login_args = (account, password)
+
+    def send_message(self, message):
+        self.messages.append(message)
+
+    def quit(self):
+        self.quit_calls += 1
+
+
+class FailingLoginSMTP(FakeSMTP):
+    def login(self, account, password):
+        raise RuntimeError(f"authentication rejected: {password}")
+
+
+class MailSmtpTests(unittest.TestCase):
+    @staticmethod
+    def smtp_settings(**overrides):
+        settings = {
+            "host": "smtp.example.com",
+            "port": 465,
+            "security": "ssl",
+            "account": "editor@example.com",
+            "password": "smtp-auth-code",
+            "fromName": "张编辑",
+            "fromAddress": "editor@example.com",
+        }
+        settings.update(overrides)
+        return settings
+
+    def test_send_uses_one_recipient_and_never_exposes_password(self):
+        fake = FakeSMTP()
+
+        send_smtp_message(
+            self.smtp_settings(),
+            {
+                "name": "张三",
+                "email": "teacher@example.edu.cn",
+                "subject": "教材合作",
+                "body": "张老师您好",
+            },
+            smtp_factory=lambda *_args, **_kwargs: fake,
+        )
+
+        self.assertEqual(fake.login_args, ("editor@example.com", "smtp-auth-code"))
+        self.assertEqual(fake.messages[0]["To"], "teacher@example.edu.cn")
+        self.assertEqual(fake.messages[0]["Subject"], "教材合作")
+        self.assertIn("张老师您好", fake.messages[0].get_content())
+        self.assertNotIn("smtp-auth-code", fake.messages[0].as_string())
+        self.assertEqual(fake.quit_calls, 1)
+
+    def test_connection_supports_ssl_starttls_and_plain_transport(self):
+        ssl_client = FakeSMTP()
+        starttls_client = FakeSMTP()
+        plain_client = FakeSMTP()
+
+        test_smtp_connection(
+            self.smtp_settings(security="ssl"),
+            smtp_factory=lambda *_args, **_kwargs: ssl_client,
+        )
+        test_smtp_connection(
+            self.smtp_settings(port=587, security="starttls"),
+            smtp_factory=lambda *_args, **_kwargs: starttls_client,
+        )
+        test_smtp_connection(
+            self.smtp_settings(port=25, security="none"),
+            smtp_factory=lambda *_args, **_kwargs: plain_client,
+        )
+
+        self.assertEqual(ssl_client.starttls_calls, 0)
+        self.assertEqual(starttls_client.starttls_calls, 1)
+        self.assertEqual(plain_client.starttls_calls, 0)
+        self.assertEqual(ssl_client.quit_calls, 1)
+        self.assertEqual(starttls_client.quit_calls, 1)
+        self.assertEqual(plain_client.quit_calls, 1)
+
+    def test_normalize_rejects_invalid_port_and_security(self):
+        with self.assertRaisesRegex(ValueError, "端口"):
+            normalize_smtp_settings(self.smtp_settings(port=0))
+        with self.assertRaisesRegex(ValueError, "加密"):
+            normalize_smtp_settings(self.smtp_settings(security="tls-unknown"))
+
+    def test_login_error_is_sanitized(self):
+        with self.assertRaisesRegex(RuntimeError, "authentication rejected") as context:
+            test_smtp_connection(
+                self.smtp_settings(),
+                smtp_factory=lambda *_args, **_kwargs: FailingLoginSMTP(),
+            )
+
+        self.assertNotIn("smtp-auth-code", str(context.exception))
 
 if __name__ == "__main__":
     unittest.main()
