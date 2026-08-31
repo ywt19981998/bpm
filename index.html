@@ -2891,6 +2891,8 @@
           <div class="top-actions">
             <span class="project-save-status" id="mailDraftStatus" role="status" aria-live="polite">草稿已保存</span>
             <button id="refreshMailBatches" type="button"><i data-lucide="refresh-cw" size="16"></i>刷新记录</button>
+            <button class="icon-button" id="openMailSettings" type="button" aria-label="个人设置" title="个人设置"><i data-lucide="settings" size="17"></i></button>
+            <button class="icon-button" id="logoutMailButton" type="button" aria-label="退出登录" title="退出登录"><i data-lucide="log-out" size="17"></i></button>
           </div>
         </div>
 
@@ -3487,6 +3489,7 @@
       mailActiveTemplateName.textContent = "未选择模板";
       mailTemplateList.replaceChildren(createMailEmpty("暂无模板"));
       mailBatchHistory.replaceChildren(createMailEmpty("暂无发送记录"));
+      document.getElementById("confirmMailTemplate").disabled = false;
       if (mailPreviewDialog.open) mailPreviewDialog.close();
       if (mailTemplateDialog.open) mailTemplateDialog.close();
       renderMailRecipients();
@@ -3868,6 +3871,7 @@
           const button = document.createElement("button");
           button.type = "button";
           button.className = `mail-template-item${template.id === mailState.selectedTemplateId ? " active" : ""}`;
+          button.setAttribute("aria-pressed", String(template.id === mailState.selectedTemplateId));
           const name = document.createElement("span");
           name.className = "mail-template-name";
           name.textContent = template.name;
@@ -4232,7 +4236,7 @@
     async function retryMailBatch(batchId) {
       const session = captureSession();
       if (!window.confirm("确认只重试这个批次中的失败邮件吗？已成功的邮件不会重复发送。")) return;
-      const requestKey = mailState.retryIdempotencyKeys[batchId] ||= MailUiHelpers.createIdempotencyKey("retry");
+      const requestKey = mailState.retryIdempotencyKeys[batchId] ||= MailUiHelpers.createIdempotencyKey("retry", batchId);
       try {
         const response = await apiFetch(`/api/mail/batches/${batchId}/retry`, {
           method: "POST",
@@ -4242,7 +4246,6 @@
         });
         if (!isCurrentSession(session)) return;
         if (!response.ok) throw new Error(await responseError(response, "失败邮件重试失败"));
-        delete mailState.retryIdempotencyKeys[batchId];
         showToast("失败邮件已加入重试队列");
         await refreshMailBatches(session);
       } catch (error) {
@@ -5258,6 +5261,11 @@
     document.getElementById("menuReport").addEventListener("click", () => switchMainView("report"));
     document.getElementById("menuBpm").addEventListener("click", () => switchMainView("bpm"));
     document.getElementById("menuMail").addEventListener("click", () => switchMainView("mail"));
+    document.getElementById("openMailSettings").addEventListener("click", openBpmSettingsDialog);
+    document.getElementById("logoutMailButton").addEventListener("click", () => {
+      const logoutButton = document.getElementById("logoutButton");
+      logoutButton.click();
+    });
     document.getElementById("refreshProjects").addEventListener("click", () => loadProjects());
     projectSearch.addEventListener("input", () => {
       window.clearTimeout(projectSearchTimer);

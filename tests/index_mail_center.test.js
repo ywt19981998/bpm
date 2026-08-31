@@ -114,8 +114,10 @@ test("failed batches can be retried with confirmation and a stable key", () => {
   assert.match(body, /window\.confirm\([^)]*重试/);
   assert.match(body, /confirmed:\s*true/);
   assert.match(body, /mailState\.retryIdempotencyKeys/);
+  assert.match(body, /createIdempotencyKey\("retry",\s*batchId\)/);
   assert.match(body, /"Idempotency-Key":\s*requestKey/);
   assert.match(body, /`\/api\/mail\/batches\/\$\{batchId\}\/retry`/);
+  assert.doesNotMatch(body, /delete mailState\.retryIdempotencyKeys\[batchId\]/);
 });
 
 test("mail send and retry responses are ignored after the active user changes", () => {
@@ -127,6 +129,18 @@ test("mail send and retry responses are ignored after the active user changes", 
       /const response = await apiFetch\([\s\S]*?if \(!isCurrentSession\(session\)\) return;[\s\S]*?if \(!response\.ok\)/
     );
   }
+});
+
+test("mail workspace keeps personal settings and logout reachable", () => {
+  assert.match(source, /id="openMailSettings"[^>]*aria-label="个人设置"/);
+  assert.match(source, /id="logoutMailButton"[^>]*aria-label="退出登录"/);
+  assert.match(source, /openMailSettings[\s\S]*addEventListener\("click", openBpmSettingsDialog\)/);
+  assert.match(source, /logoutMailButton[\s\S]*logoutButton[\s\S]*\.click\(\)/);
+});
+
+test("selected mail template is exposed and template submit resets between users", () => {
+  assert.match(source, /button\.setAttribute\("aria-pressed",\s*String\(template\.id === mailState\.selectedTemplateId\)\)/);
+  assert.match(source, /function resetMailWorkspace\(\)[\s\S]*confirmMailTemplate[\s\S]*disabled = false/);
 });
 
 test("mail helper extracts unique variables in document order", () => {
