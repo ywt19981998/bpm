@@ -6,6 +6,7 @@
   <title>选题策划报告工作台</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23edf3ff'/%3E%3Cpath d='M10 7h9l4 4v14H10z' fill='none' stroke='%232563eb' stroke-width='2'/%3E%3Cpath d='M19 7v5h5M13 16h7M13 20h7' stroke='%232563eb' stroke-width='2'/%3E%3C/svg%3E">
   <script src="auth_session_generation.js"></script>
+  <script src="mail_ui_helpers.js"></script>
   <script src="vendor/lucide-0.468.0.min.js"></script>
   <style>
     :root {
@@ -1579,6 +1580,392 @@
       min-width: 0;
     }
 
+    .app.mail-mode {
+      grid-template-columns: 76px minmax(0, 1fr);
+    }
+
+    .app.mail-mode .sidebar {
+      grid-template-columns: 76px;
+    }
+
+    .app.mail-mode .project-rail,
+    .app.mail-mode .right {
+      display: none;
+    }
+
+    .mail-main {
+      min-width: 0;
+      padding: 22px 26px 30px;
+      background: #fbfcff;
+      overflow: auto;
+    }
+
+    .mail-page {
+      max-width: 1580px;
+      margin: 0 auto;
+      display: grid;
+      gap: 16px;
+    }
+
+    .mail-workspace {
+      display: grid;
+      grid-template-columns: 260px minmax(420px, 1fr) 330px;
+      min-height: 640px;
+      border: 1px solid var(--line);
+      background: var(--surface);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .mail-column {
+      min-width: 0;
+      padding: 18px;
+      border-right: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .mail-column:last-child {
+      border-right: 0;
+    }
+
+    .mail-column-head {
+      min-height: 42px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .mail-column-title {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 760;
+    }
+
+    .mail-template-panel {
+      background: #f7f9fd;
+    }
+
+    .mail-template-search {
+      width: 100%;
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 0 12px;
+      background: #fff;
+      margin-bottom: 12px;
+    }
+
+    .mail-template-list,
+    .mail-recipient-list,
+    .mail-invalid-list,
+    .mail-batch-history {
+      display: grid;
+      gap: 8px;
+    }
+
+    .mail-template-item {
+      width: 100%;
+      min-height: 70px;
+      padding: 12px;
+      display: block;
+      text-align: left;
+      white-space: normal;
+      background: #fff;
+      border-color: var(--line);
+    }
+
+    .mail-template-item.active {
+      border-color: #a9c3ff;
+      background: var(--teal-soft);
+      color: var(--teal);
+      box-shadow: inset 3px 0 0 var(--teal);
+    }
+
+    .mail-template-name {
+      display: block;
+      font-weight: 740;
+      color: inherit;
+    }
+
+    .mail-template-subject {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .mail-compose-editor {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .mail-compose-editor label,
+    .mail-template-dialog-form label {
+      display: grid;
+      gap: 7px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+
+    .mail-compose-editor input,
+    .mail-compose-editor textarea,
+    .mail-template-dialog-form input,
+    .mail-template-dialog-form textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--text);
+      padding: 11px 12px;
+    }
+
+    .mail-compose-editor input {
+      min-height: 44px;
+    }
+
+    .mail-compose-editor textarea {
+      min-height: 360px;
+      resize: vertical;
+      line-height: 1.8;
+    }
+
+    .mail-variable-bar {
+      min-height: 38px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--surface-subtle);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .mail-variable {
+      color: var(--teal);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    }
+
+    .mail-compose-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .mail-compose-actions > div {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .mail-recipient-panel {
+      background: #fafbfe;
+    }
+
+    .mail-upload-button {
+      width: 100%;
+      min-height: 44px;
+      margin-bottom: 12px;
+    }
+
+    .mail-recipient-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      margin: 12px 0;
+    }
+
+    .mail-summary-item {
+      padding: 9px 6px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      text-align: center;
+    }
+
+    .mail-summary-value {
+      display: block;
+      font-weight: 800;
+      font-size: 17px;
+    }
+
+    .mail-summary-label {
+      color: var(--muted);
+      font-size: 10px;
+    }
+
+    .mail-recipient-list,
+    .mail-invalid-list {
+      max-height: 180px;
+      overflow: auto;
+      margin-top: 8px;
+    }
+
+    .mail-recipient-row,
+    .mail-invalid-row {
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      font-size: 12px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+
+    .mail-invalid-row {
+      border-color: #f2c5c1;
+      color: var(--red);
+      background: #fffafa;
+    }
+
+    .mail-send-check {
+      margin-top: 14px;
+      padding-top: 14px;
+      border-top: 1px solid var(--line);
+      display: grid;
+      gap: 9px;
+    }
+
+    .mail-send-check p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .mail-send-check button {
+      width: 100%;
+    }
+
+    .mail-history-section {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      padding: 16px 18px;
+    }
+
+    .mail-batch-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .mail-batch-item:first-child {
+      border-top: 0;
+    }
+
+    .mail-batch-title {
+      font-weight: 720;
+      overflow-wrap: anywhere;
+    }
+
+    .mail-batch-meta {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .mail-status-badge {
+      min-width: 72px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--muted);
+      background: var(--soft);
+    }
+
+    .mail-status-badge.success { color: #177a58; background: #e5f6ef; }
+    .mail-status-badge.warning { color: var(--amber); background: var(--amber-soft); }
+    .mail-status-badge.danger { color: var(--red); background: var(--red-soft); }
+    .mail-status-badge.active { color: var(--teal); background: var(--teal-soft); }
+
+    .mail-preview-dialog,
+    .mail-template-dialog {
+      width: min(760px, calc(100vw - 32px));
+      border: 0;
+      border-radius: 8px;
+      padding: 0;
+      box-shadow: var(--shadow-raised);
+    }
+
+    .mail-preview-dialog::backdrop,
+    .mail-template-dialog::backdrop {
+      background: rgba(23, 32, 51, 0.3);
+    }
+
+    .mail-dialog-shell {
+      padding: 20px;
+      background: #fff;
+    }
+
+    .mail-dialog-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .mail-dialog-head h2 {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .mail-preview-list {
+      max-height: 60vh;
+      overflow: auto;
+      display: grid;
+      gap: 10px;
+    }
+
+    .mail-preview-item {
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 13px;
+      background: var(--surface-subtle);
+    }
+
+    .mail-preview-body {
+      margin-top: 8px;
+      white-space: pre-wrap;
+      line-height: 1.65;
+      color: #3f4c63;
+    }
+
+    .mail-template-dialog-form {
+      display: grid;
+      gap: 12px;
+    }
+
+    .mail-template-dialog-form textarea {
+      min-height: 220px;
+      resize: vertical;
+      line-height: 1.7;
+    }
+
+    .mail-empty {
+      padding: 24px 10px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
     .bpm-account-copy .file-state {
       margin-top: 5px;
     }
@@ -1652,6 +2039,18 @@
       }
     }
 
+    @media (max-width: 1100px) {
+      .mail-workspace {
+        grid-template-columns: 240px minmax(0, 1fr);
+      }
+
+      #mailRecipientPanel {
+        grid-column: 1 / -1;
+        border-top: 1px solid var(--line);
+        border-right: 0;
+      }
+    }
+
     @media (max-width: 840px) {
       .auth-view {
         padding: 16px;
@@ -1659,6 +2058,39 @@
 
       .app {
         display: block;
+      }
+
+      .app.mail-mode .sidebar {
+        display: block;
+      }
+
+      .app.mail-mode .project-rail {
+        display: none;
+      }
+
+      .mail-main {
+        padding: 16px;
+      }
+
+      .mail-workspace {
+        display: block;
+      }
+
+      .mail-column {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .mail-column:last-child {
+        border-bottom: 0;
+      }
+
+      .mail-compose-editor textarea {
+        min-height: 280px;
+      }
+
+      .mail-batch-item {
+        grid-template-columns: minmax(0, 1fr);
       }
 
       .sidebar {
@@ -2017,6 +2449,10 @@
           <button class="menu-button" id="menuBpm" title="BPM 填报">
             <i data-lucide="workflow" size="20"></i>
             <span>BPM 填报</span>
+          </button>
+          <button class="menu-button" id="menuMail" title="邮件中心">
+            <i data-lucide="mail" size="20"></i>
+            <span>邮件中心</span>
           </button>
         </nav>
       </div>
@@ -2445,6 +2881,132 @@
       </div>
     </main>
 
+    <main class="mail-main" id="mailView" hidden>
+      <div class="mail-page">
+        <div class="topbar">
+          <div class="title-block">
+            <h1>邮件中心</h1>
+            <p>管理常用模板，上传教师名单，预览无误后逐封发送。</p>
+          </div>
+          <div class="top-actions">
+            <span class="project-save-status" id="mailDraftStatus" role="status" aria-live="polite">草稿已保存</span>
+            <button id="refreshMailBatches" type="button"><i data-lucide="refresh-cw" size="16"></i>刷新记录</button>
+          </div>
+        </div>
+
+        <section class="mail-workspace" aria-label="邮件编辑工作区">
+          <aside class="mail-column mail-template-panel" id="mailTemplatePanel">
+            <div class="mail-column-head">
+              <h2 class="mail-column-title">邮件模板</h2>
+              <button class="icon-button" id="createMailTemplate" type="button" aria-label="新建邮件模板" title="新建模板">
+                <i data-lucide="plus" size="17"></i>
+              </button>
+            </div>
+            <input class="mail-template-search" id="mailTemplateSearch" type="search" placeholder="搜索模板" autocomplete="off">
+            <div class="mail-template-list" id="mailTemplateList">
+              <div class="mail-empty">正在读取模板...</div>
+            </div>
+          </aside>
+
+          <section class="mail-column mail-compose-editor" id="mailComposeEditor">
+            <div class="mail-column-head">
+              <div>
+                <h2 class="mail-column-title">撰写邮件</h2>
+                <div class="file-state" id="mailActiveTemplateName">未选择模板</div>
+              </div>
+              <button id="saveMailTemplate" type="button"><i data-lucide="save" size="16"></i>保存到模板</button>
+            </div>
+            <label>
+              <span>主题</span>
+              <input id="mailSubject" type="text" autocomplete="off" placeholder="输入邮件主题，可使用 {{姓名}} 等变量">
+            </label>
+            <label>
+              <span>正文</span>
+              <textarea id="mailBody" spellcheck="false" placeholder="输入邮件正文"></textarea>
+            </label>
+            <div class="mail-variable-bar" id="mailVariableBar">
+              <span>可用变量：</span>
+              <span class="mail-variable">{{姓名}}</span>
+              <span class="mail-variable">{{学校}}</span>
+              <span class="mail-variable">{{学院}}</span>
+              <span class="mail-variable">{{研究方向}}</span>
+            </div>
+            <div class="mail-compose-actions">
+              <div>
+                <button id="duplicateMailTemplate" type="button"><i data-lucide="copy" size="16"></i>复制模板</button>
+                <button class="danger" id="deleteMailTemplate" type="button"><i data-lucide="trash-2" size="16"></i>删除模板</button>
+              </div>
+              <button id="previewMail" type="button"><i data-lucide="scan-eye" size="16"></i>预览个性化结果</button>
+            </div>
+          </section>
+
+          <aside class="mail-column mail-recipient-panel" id="mailRecipientPanel">
+            <div class="mail-column-head">
+              <div>
+                <h2 class="mail-column-title">收件人名单</h2>
+                <div class="file-state" id="mailRecipientFileName">支持 CSV、XLSX</div>
+              </div>
+            </div>
+            <label>
+              <input class="hidden-file" id="mailRecipientFile" type="file" accept=".csv,.xlsx">
+              <button class="mail-upload-button" id="chooseMailRecipientFile" type="button"><i data-lucide="sheet" size="16"></i>上传姓名和邮箱</button>
+            </label>
+            <div class="mail-recipient-summary" aria-label="名单统计">
+              <div class="mail-summary-item"><span class="mail-summary-value" id="mailValidCount">0</span><span class="mail-summary-label">有效</span></div>
+              <div class="mail-summary-item"><span class="mail-summary-value" id="mailInvalidCount">0</span><span class="mail-summary-label">无效</span></div>
+              <div class="mail-summary-item"><span class="mail-summary-value" id="mailDuplicateCount">0</span><span class="mail-summary-label">重复</span></div>
+            </div>
+            <div class="file-state">有效收件人</div>
+            <div class="mail-recipient-list" id="mailRecipientList">
+              <div class="mail-empty">尚未上传名单</div>
+            </div>
+            <div class="file-state" id="mailInvalidHeading" hidden>未导入记录</div>
+            <div class="mail-invalid-list" id="mailInvalidRecipientList"></div>
+            <div class="mail-send-check">
+              <p id="mailSendCheck" role="status" aria-live="polite">请先上传名单并填写主题、正文。</p>
+              <button class="primary" id="submitMail" type="button" disabled><i data-lucide="send" size="16"></i>确认并逐封发送</button>
+            </div>
+          </aside>
+        </section>
+
+        <section class="mail-history-section" aria-labelledby="mailHistoryTitle">
+          <div class="mail-column-head">
+            <h2 class="mail-column-title" id="mailHistoryTitle">发送记录</h2>
+            <div class="file-state">只保存发送状态与错误摘要</div>
+          </div>
+          <div class="mail-batch-history" id="mailBatchHistory">
+            <div class="mail-empty">暂无发送记录</div>
+          </div>
+        </section>
+      </div>
+
+      <dialog class="mail-preview-dialog" id="mailPreviewDialog" aria-labelledby="mailPreviewTitle">
+        <div class="mail-dialog-shell">
+          <div class="mail-dialog-head">
+            <h2 id="mailPreviewTitle">个性化预览</h2>
+            <button class="icon-button" id="closeMailPreview" type="button" aria-label="关闭预览" title="关闭"><i data-lucide="x" size="17"></i></button>
+          </div>
+          <div class="mail-preview-list" id="mailPreviewList"></div>
+        </div>
+      </dialog>
+
+      <dialog class="mail-template-dialog" id="mailTemplateDialog" aria-labelledby="mailTemplateDialogTitle">
+        <form class="mail-dialog-shell mail-template-dialog-form" id="mailTemplateForm">
+          <div class="mail-dialog-head">
+            <h2 id="mailTemplateDialogTitle">新建邮件模板</h2>
+            <button class="icon-button" id="closeMailTemplateDialog" type="button" aria-label="关闭模板编辑" title="关闭"><i data-lucide="x" size="17"></i></button>
+          </div>
+          <label><span>模板名称</span><input id="mailTemplateNameInput" type="text" required maxlength="80"></label>
+          <label><span>主题</span><input id="mailTemplateSubjectInput" type="text" required maxlength="300"></label>
+          <label><span>正文</span><textarea id="mailTemplateBodyInput" required></textarea></label>
+          <div class="top-actions">
+            <button id="cancelMailTemplate" type="button">取消</button>
+            <button class="primary" id="confirmMailTemplate" type="submit"><i data-lucide="save" size="16"></i>保存模板</button>
+          </div>
+        </form>
+      </dialog>
+    </main>
+
     <aside class="right">
       <div class="assist-heading"><i data-lucide="sparkles" size="17"></i>智能辅助</div>
       <section class="panel">
@@ -2640,6 +3202,43 @@
     const testSmtpCredentials = document.getElementById("testSmtpCredentials");
     const clearSmtpCredentials = document.getElementById("clearSmtpCredentials");
     const smtpStatus = document.getElementById("smtpStatus");
+    const mailView = document.getElementById("mailView");
+    const mailTemplateList = document.getElementById("mailTemplateList");
+    const mailTemplateSearch = document.getElementById("mailTemplateSearch");
+    const mailSubject = document.getElementById("mailSubject");
+    const mailBody = document.getElementById("mailBody");
+    const mailDraftStatus = document.getElementById("mailDraftStatus");
+    const mailActiveTemplateName = document.getElementById("mailActiveTemplateName");
+    const mailVariableBar = document.getElementById("mailVariableBar");
+    const mailRecipientFile = document.getElementById("mailRecipientFile");
+    const mailRecipientList = document.getElementById("mailRecipientList");
+    const mailInvalidRecipientList = document.getElementById("mailInvalidRecipientList");
+    const mailInvalidHeading = document.getElementById("mailInvalidHeading");
+    const mailSendCheck = document.getElementById("mailSendCheck");
+    const submitMail = document.getElementById("submitMail");
+    const mailBatchHistory = document.getElementById("mailBatchHistory");
+    const mailPreviewDialog = document.getElementById("mailPreviewDialog");
+    const mailPreviewList = document.getElementById("mailPreviewList");
+    const mailTemplateDialog = document.getElementById("mailTemplateDialog");
+    const mailTemplateForm = document.getElementById("mailTemplateForm");
+    const mailTemplateNameInput = document.getElementById("mailTemplateNameInput");
+    const mailTemplateSubjectInput = document.getElementById("mailTemplateSubjectInput");
+    const mailTemplateBodyInput = document.getElementById("mailTemplateBodyInput");
+    const mailState = {
+      templates: [],
+      selectedTemplateId: null,
+      recipients: [],
+      invalidRecipients: [],
+      duplicates: 0,
+      columns: [],
+      batches: [],
+      sending: false,
+      pendingIdempotencyKey: null,
+      retryIdempotencyKeys: {},
+      draftTimer: null,
+      loading: false,
+      loadedUserId: null
+    };
     const authBusy = new AuthBusyState();
     const authSession = new AuthSessionGeneration();
 
@@ -2805,7 +3404,10 @@
         : "尚未配置发件邮箱";
       clearSmtpCredentials.disabled = !smtpCredentialConfigured;
       testSmtpCredentials.disabled = !smtpCredentialConfigured;
-      if (!smtpCredentialConfigured) return;
+      if (!smtpCredentialConfigured) {
+        updateMailSendCheck();
+        return;
+      }
       smtpHost.value = status.host || "smtp.qiye.163.com";
       smtpPort.value = String(status.port || 465);
       smtpSecurity.value = status.security || "ssl";
@@ -2813,6 +3415,7 @@
       smtpAccount.value = "";
       smtpPassword.value = "";
       smtpFromAddress.value = "";
+      updateMailSendCheck();
     }
 
     async function loadSmtpCredentialStatus(session = captureSession()) {
@@ -2831,6 +3434,7 @@
         clearSmtpCredentials.disabled = true;
         testSmtpCredentials.disabled = true;
         smtpStatus.textContent = error.message || "无法读取发件邮箱配置";
+        updateMailSendCheck();
       }
     }
 
@@ -2859,6 +3463,35 @@
       document.getElementById(id).value = "";
     }
 
+    function resetMailWorkspace() {
+      window.clearTimeout(mailState.draftTimer);
+      mailState.templates = [];
+      mailState.selectedTemplateId = null;
+      mailState.recipients = [];
+      mailState.invalidRecipients = [];
+      mailState.duplicates = 0;
+      mailState.columns = [];
+      mailState.batches = [];
+      mailState.sending = false;
+      mailState.pendingIdempotencyKey = null;
+      mailState.retryIdempotencyKeys = {};
+      mailState.draftTimer = null;
+      mailState.loading = false;
+      mailState.loadedUserId = null;
+      mailTemplateSearch.value = "";
+      mailSubject.value = "";
+      mailBody.value = "";
+      mailRecipientFile.value = "";
+      document.getElementById("mailRecipientFileName").textContent = "支持 CSV、XLSX";
+      mailDraftStatus.textContent = "草稿已保存";
+      mailActiveTemplateName.textContent = "未选择模板";
+      mailTemplateList.replaceChildren(createMailEmpty("暂无模板"));
+      mailBatchHistory.replaceChildren(createMailEmpty("暂无发送记录"));
+      if (mailPreviewDialog.open) mailPreviewDialog.close();
+      if (mailTemplateDialog.open) mailTemplateDialog.close();
+      renderMailRecipients();
+    }
+
     function clearWorkspaceState() {
       clearInterval(progressTimer);
       window.clearTimeout(projectAutosaveTimer);
@@ -2878,6 +3511,7 @@
       projectSaveState = "saved";
       currentProjectPreflight = null;
       creatingNewProject = false;
+      resetMailWorkspace();
       sections.forEach((section) => {
         section.text = "";
         section.confirmed = false;
@@ -2920,11 +3554,14 @@
       projectCenterView.hidden = false;
       reportView.hidden = true;
       bpmView.hidden = true;
+      mailView.hidden = true;
       workspace.classList.add("projects-mode");
       workspace.classList.remove("bpm-mode");
+      workspace.classList.remove("mail-mode");
       document.getElementById("menuProjects").classList.add("active");
       document.getElementById("menuReport").classList.remove("active");
       document.getElementById("menuBpm").classList.remove("active");
+      document.getElementById("menuMail").classList.remove("active");
       sectionText.value = "";
       scoreRows.replaceChildren();
       projectTableBody.replaceChildren();
@@ -3191,18 +3828,439 @@
       }, 1600);
     }
 
+    function createMailEmpty(message) {
+      const empty = document.createElement("div");
+      empty.className = "mail-empty";
+      empty.textContent = message;
+      return empty;
+    }
+
+    function selectedMailTemplate() {
+      return mailState.templates.find((template) => template.id === mailState.selectedTemplateId) || null;
+    }
+
+    function renderMailVariables() {
+      const variables = MailUiHelpers.extractTemplateVariables(`${mailSubject.value}\n${mailBody.value}`);
+      const available = ["姓名", ...mailState.columns.filter((column) => !["姓名", "邮箱"].includes(column))];
+      const names = [...new Set([...available, ...variables])].filter(Boolean);
+      const label = document.createElement("span");
+      label.textContent = "可用变量：";
+      const nodes = [label];
+      names.forEach((name) => {
+        const variable = document.createElement("span");
+        variable.className = "mail-variable";
+        variable.textContent = `{{${name}}}`;
+        nodes.push(variable);
+      });
+      mailVariableBar.replaceChildren(...nodes);
+    }
+
+    function renderMailTemplates() {
+      const query = mailTemplateSearch.value.trim().toLocaleLowerCase("zh-CN");
+      const templates = mailState.templates.filter((template) => {
+        if (!query) return true;
+        return `${template.name} ${template.subject}`.toLocaleLowerCase("zh-CN").includes(query);
+      });
+      if (!templates.length) {
+        mailTemplateList.replaceChildren(createMailEmpty(query ? "没有匹配的模板" : "暂无模板"));
+      } else {
+        const buttons = templates.map((template) => {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `mail-template-item${template.id === mailState.selectedTemplateId ? " active" : ""}`;
+          const name = document.createElement("span");
+          name.className = "mail-template-name";
+          name.textContent = template.name;
+          const subject = document.createElement("span");
+          subject.className = "mail-template-subject";
+          subject.textContent = template.subject;
+          button.append(name, subject);
+          button.addEventListener("click", () => selectMailTemplate(template));
+          return button;
+        });
+        mailTemplateList.replaceChildren(...buttons);
+      }
+      const active = selectedMailTemplate();
+      mailActiveTemplateName.textContent = active ? `当前模板：${active.name}` : "未选择模板";
+      document.getElementById("saveMailTemplate").disabled = !active;
+      document.getElementById("duplicateMailTemplate").disabled = !active;
+      document.getElementById("deleteMailTemplate").disabled = !active;
+    }
+
+    function selectMailTemplate(template) {
+      mailState.selectedTemplateId = template.id;
+      mailSubject.value = template.subject || "";
+      mailBody.value = template.body || "";
+      mailState.pendingIdempotencyKey = null;
+      renderMailTemplates();
+      renderMailVariables();
+      updateMailSendCheck();
+      scheduleMailDraftSave();
+    }
+
+    function renderMailRecipients() {
+      const summary = MailUiHelpers.summarizeRecipients(
+        mailState.recipients,
+        mailState.invalidRecipients,
+        mailState.duplicates
+      );
+      document.getElementById("mailValidCount").textContent = String(summary.validCount);
+      document.getElementById("mailInvalidCount").textContent = String(summary.invalidCount);
+      document.getElementById("mailDuplicateCount").textContent = String(summary.duplicateCount);
+      if (!mailState.recipients.length) {
+        mailRecipientList.replaceChildren(createMailEmpty("尚未上传名单"));
+      } else {
+        const rows = mailState.recipients.map((recipient) => {
+          const row = document.createElement("div");
+          row.className = "mail-recipient-row";
+          const name = document.createElement("strong");
+          name.textContent = recipient.name || "未命名";
+          const email = document.createElement("div");
+          email.textContent = recipient.email || "";
+          row.append(name, email);
+          return row;
+        });
+        mailRecipientList.replaceChildren(...rows);
+      }
+      mailInvalidHeading.hidden = !mailState.invalidRecipients.length;
+      const invalidRows = mailState.invalidRecipients.map((recipient) => {
+        const row = document.createElement("div");
+        row.className = "mail-invalid-row";
+        row.textContent = `第 ${recipient.row || "?"} 行：${recipient.name || recipient.email || "空记录"}，${recipient.reason || "无法导入"}`;
+        return row;
+      });
+      mailInvalidRecipientList.replaceChildren(...invalidRows);
+      renderMailVariables();
+      updateMailSendCheck();
+    }
+
+    function updateMailSendCheck() {
+      const issues = [];
+      if (!mailState.recipients.length) issues.push("未上传有效收件人");
+      if (!mailSubject.value.trim()) issues.push("主题为空");
+      if (!mailBody.value.trim()) issues.push("正文为空");
+      if (!smtpCredentialConfigured) issues.push("未配置发件邮箱");
+      if (issues.length) {
+        mailSendCheck.textContent = `暂不能发送：${issues.join("、")}。`;
+      } else {
+        mailSendCheck.textContent = `已准备 ${mailState.recipients.length} 位有效收件人，将按名单逐封发送。`;
+      }
+      submitMail.disabled = Boolean(issues.length) || mailState.sending;
+    }
+
+    function mailDraftPayload() {
+      return {
+        templateId: mailState.selectedTemplateId,
+        subject: mailSubject.value,
+        body: mailBody.value,
+        recipients: mailState.recipients
+      };
+    }
+
+    async function saveMailDraft() {
+      const session = captureSession();
+      if (!currentUser || !isCurrentSession(session)) return;
+      mailState.draftTimer = null;
+      mailDraftStatus.textContent = "正在保存...";
+      try {
+        const response = await apiFetch("/api/mail/draft", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(mailDraftPayload()),
+          session
+        });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) throw new Error(await responseError(response, "邮件草稿保存失败"));
+        mailDraftStatus.textContent = "草稿已保存";
+      } catch (error) {
+        if (isCurrentSession(session)) mailDraftStatus.textContent = error.message || "草稿保存失败";
+      }
+    }
+
+    function scheduleMailDraftSave() {
+      mailState.pendingIdempotencyKey = null;
+      mailDraftStatus.textContent = "未保存";
+      window.clearTimeout(mailState.draftTimer);
+      mailState.draftTimer = window.setTimeout(saveMailDraft, 700);
+      renderMailVariables();
+      updateMailSendCheck();
+    }
+
+    async function loadMailWorkspace(session = captureSession()) {
+      if (!currentUser || !isCurrentSession(session) || mailState.loading) return;
+      mailState.loading = true;
+      mailTemplateList.replaceChildren(createMailEmpty("正在读取模板..."));
+      try {
+        const [templateResponse, draftResponse, batchResponse] = await Promise.all([
+          apiFetch("/api/mail/templates", { cache: "no-store", session }),
+          apiFetch("/api/mail/draft", { cache: "no-store", session }),
+          apiFetch("/api/mail/batches?limit=30", { cache: "no-store", session })
+        ]);
+        if (!isCurrentSession(session)) return;
+        for (const response of [templateResponse, draftResponse, batchResponse]) {
+          if (!response.ok) throw new Error(await responseError(response, "无法读取邮件中心数据"));
+        }
+        const [templateData, draftData, batchData] = await Promise.all([
+          templateResponse.json(), draftResponse.json(), batchResponse.json()
+        ]);
+        if (!isCurrentSession(session)) return;
+        mailState.templates = Array.isArray(templateData.templates) ? templateData.templates : [];
+        const draft = draftData.draft || {};
+        mailState.selectedTemplateId = draft.templateId || null;
+        mailSubject.value = draft.subject || "";
+        mailBody.value = draft.body || "";
+        mailState.recipients = Array.isArray(draft.recipients) ? draft.recipients : [];
+        mailState.invalidRecipients = [];
+        mailState.duplicates = 0;
+        mailState.batches = Array.isArray(batchData.batches) ? batchData.batches : [];
+        mailState.loadedUserId = currentUser.id;
+        mailDraftStatus.textContent = "草稿已保存";
+        renderMailTemplates();
+        renderMailRecipients();
+        renderMailBatches();
+      } catch (error) {
+        if (!isCurrentSession(session)) return;
+        mailTemplateList.replaceChildren(createMailEmpty(error.message || "邮件中心读取失败"));
+        showToast("邮件中心读取失败");
+      } finally {
+        if (isCurrentSession(session)) mailState.loading = false;
+      }
+    }
+
+    async function parseMailRecipientFile(file) {
+      const session = captureSession();
+      if (!file || !isCurrentSession(session)) return;
+      const suffix = file.name.toLocaleLowerCase();
+      if (!suffix.endsWith(".csv") && !suffix.endsWith(".xlsx")) {
+        showToast("名单只支持 .csv 或 .xlsx");
+        return;
+      }
+      if (mailState.recipients.length && !window.confirm("上传新名单会替换当前收件人，确认替换吗？")) {
+        mailRecipientFile.value = "";
+        return;
+      }
+      const form = new FormData();
+      form.append("file", file, file.name);
+      document.getElementById("mailRecipientFileName").textContent = "正在解析名单...";
+      try {
+        const response = await apiFetch("/api/mail/recipients/parse", { method: "POST", body: form, session });
+        if (!isCurrentSession(session)) return;
+        if (!response.ok) throw new Error(await responseError(response, "名单解析失败"));
+        const result = await response.json();
+        if (!isCurrentSession(session)) return;
+        mailState.recipients = Array.isArray(result.valid) ? result.valid : [];
+        mailState.invalidRecipients = Array.isArray(result.invalid) ? result.invalid : [];
+        mailState.duplicates = Number(result.duplicates || 0);
+        mailState.columns = Array.isArray(result.columns) ? result.columns : [];
+        document.getElementById("mailRecipientFileName").textContent = file.name;
+        renderMailRecipients();
+        scheduleMailDraftSave();
+        showToast(`已导入 ${mailState.recipients.length} 位有效收件人`);
+      } catch (error) {
+        if (!isCurrentSession(session)) return;
+        document.getElementById("mailRecipientFileName").textContent = error.message || "名单解析失败";
+        showToast(error.message || "名单解析失败");
+      } finally {
+        mailRecipientFile.value = "";
+      }
+    }
+
+    function openMailTemplateDialog({ name = "", subject = "", body = "" } = {}) {
+      mailTemplateNameInput.value = name;
+      mailTemplateSubjectInput.value = subject;
+      mailTemplateBodyInput.value = body;
+      if (!mailTemplateDialog.open) mailTemplateDialog.showModal();
+      window.requestAnimationFrame(() => mailTemplateNameInput.focus());
+    }
+
+    async function createMailTemplateRecord(payload, session = captureSession()) {
+      const response = await apiFetch("/api/mail/templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        session
+      });
+      if (!response.ok) throw new Error(await responseError(response, "模板保存失败"));
+      const result = await response.json();
+      if (!isCurrentSession(session)) return null;
+      mailState.templates.unshift(result.template);
+      return result.template;
+    }
+
+    async function saveSelectedMailTemplate() {
+      const session = captureSession();
+      const template = selectedMailTemplate();
+      if (!template || !isCurrentSession(session)) return;
+      const response = await apiFetch(`/api/mail/templates/${template.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: template.name, subject: mailSubject.value, body: mailBody.value }),
+        session
+      });
+      if (!response.ok) throw new Error(await responseError(response, "模板更新失败"));
+      const result = await response.json();
+      if (!isCurrentSession(session)) return;
+      mailState.templates = mailState.templates.map((item) => item.id === result.template.id ? result.template : item);
+      renderMailTemplates();
+      showToast("模板已更新");
+    }
+
+    async function previewMailMessages() {
+      const session = captureSession();
+      try {
+        const response = await apiFetch("/api/mail/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ subject: mailSubject.value, body: mailBody.value, recipients: mailState.recipients }),
+          session
+        });
+        if (!response.ok) throw new Error(await responseError(response, "邮件预览失败"));
+        const result = await response.json();
+        if (!isCurrentSession(session)) return;
+        const previews = (result.preview || []).map((preview) => {
+          const item = document.createElement("article");
+          item.className = "mail-preview-item";
+          const to = document.createElement("div");
+          to.className = "file-state";
+          to.textContent = `${preview.name} · ${preview.email}`;
+          const subject = document.createElement("strong");
+          subject.textContent = preview.subject;
+          const body = document.createElement("div");
+          body.className = "mail-preview-body";
+          body.textContent = preview.body;
+          item.append(to, subject, body);
+          return item;
+        });
+        mailPreviewList.replaceChildren(...previews);
+        if (!mailPreviewDialog.open) mailPreviewDialog.showModal();
+      } catch (error) {
+        if (isCurrentSession(session)) showToast(error.message || "邮件预览失败");
+      }
+    }
+
+    async function submitMailBatch() {
+      if (mailState.sending) return;
+      const session = captureSession();
+      const validCount = mailState.recipients.length;
+      if (!window.confirm(`确认逐封发送 ${validCount} 封邮件吗？发送后无法撤回。`)) return;
+      mailState.sending = true;
+      submitMail.disabled = true;
+      mailState.pendingIdempotencyKey ||= MailUiHelpers.createIdempotencyKey("send");
+      try {
+        const response = await apiFetch("/api/mail/batches", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Idempotency-Key": mailState.pendingIdempotencyKey
+          },
+          body: JSON.stringify({
+            confirmed: true,
+            templateId: mailState.selectedTemplateId,
+            subject: mailSubject.value,
+            body: mailBody.value,
+            recipients: mailState.recipients
+          }),
+          session
+        });
+        if (!response.ok) throw new Error(await responseError(response, "邮件任务创建失败"));
+        mailState.pendingIdempotencyKey = null;
+        showToast("邮件已加入发送队列");
+        await refreshMailBatches(session);
+      } catch (error) {
+        if (isCurrentSession(session)) showToast(error.message || "邮件任务创建失败");
+      } finally {
+        if (isCurrentSession(session)) {
+          mailState.sending = false;
+          updateMailSendCheck();
+        }
+      }
+    }
+
+    function renderMailBatches() {
+      if (!mailState.batches.length) {
+        mailBatchHistory.replaceChildren(createMailEmpty("暂无发送记录"));
+        return;
+      }
+      const rows = mailState.batches.map((batch) => {
+        const row = document.createElement("div");
+        row.className = "mail-batch-item";
+        const copy = document.createElement("div");
+        const title = document.createElement("div");
+        title.className = "mail-batch-title";
+        title.textContent = batch.subject || "无主题邮件";
+        const meta = document.createElement("div");
+        meta.className = "mail-batch-meta";
+        meta.textContent = `${batch.createdAt || ""} · 成功 ${batch.sentCount || 0}/${batch.totalCount || 0} · 失败 ${batch.failedCount || 0}`;
+        copy.append(title, meta);
+        const statusInfo = MailUiHelpers.getMailBatchStatus(batch.status);
+        const status = document.createElement("span");
+        status.className = `mail-status-badge ${statusInfo.tone}`;
+        status.textContent = statusInfo.label;
+        row.append(copy, status);
+        if (Number(batch.failedCount || 0) > 0) {
+          const retry = document.createElement("button");
+          retry.type = "button";
+          retry.textContent = "重试失败项";
+          retry.addEventListener("click", () => retryMailBatch(batch.id));
+          row.appendChild(retry);
+        }
+        return row;
+      });
+      mailBatchHistory.replaceChildren(...rows);
+      if (window.lucide) window.lucide.createIcons();
+    }
+
+    async function refreshMailBatches(session = captureSession()) {
+      if (!currentUser || !isCurrentSession(session)) return;
+      try {
+        const response = await apiFetch("/api/mail/batches?limit=30", { cache: "no-store", session });
+        if (!response.ok) throw new Error(await responseError(response, "发送记录读取失败"));
+        const result = await response.json();
+        if (!isCurrentSession(session)) return;
+        mailState.batches = Array.isArray(result.batches) ? result.batches : [];
+        renderMailBatches();
+      } catch (error) {
+        if (isCurrentSession(session)) showToast(error.message || "发送记录读取失败");
+      }
+    }
+
+    async function retryMailBatch(batchId) {
+      const session = captureSession();
+      if (!window.confirm("确认只重试这个批次中的失败邮件吗？已成功的邮件不会重复发送。")) return;
+      const requestKey = mailState.retryIdempotencyKeys[batchId] ||= MailUiHelpers.createIdempotencyKey("retry");
+      try {
+        const response = await apiFetch(`/api/mail/batches/${batchId}/retry`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Idempotency-Key": requestKey },
+          body: JSON.stringify({ confirmed: true }),
+          session
+        });
+        if (!response.ok) throw new Error(await responseError(response, "失败邮件重试失败"));
+        delete mailState.retryIdempotencyKeys[batchId];
+        showToast("失败邮件已加入重试队列");
+        await refreshMailBatches(session);
+      } catch (error) {
+        if (isCurrentSession(session)) showToast(error.message || "失败邮件重试失败");
+      }
+    }
+
     function switchMainView(view) {
       const isProjects = view === "projects";
       const isBpm = view === "bpm";
+      const isMail = view === "mail";
       workspace.classList.toggle("projects-mode", isProjects);
       workspace.classList.toggle("bpm-mode", isBpm);
+      workspace.classList.toggle("mail-mode", isMail);
       projectCenterView.hidden = !isProjects;
-      reportView.hidden = isProjects || isBpm;
+      reportView.hidden = view !== "report";
       bpmView.hidden = !isBpm;
+      mailView.hidden = !isMail;
       document.getElementById("menuProjects").classList.toggle("active", isProjects);
       document.getElementById("menuReport").classList.toggle("active", view === "report");
       document.getElementById("menuBpm").classList.toggle("active", isBpm);
+      document.getElementById("menuMail").classList.toggle("active", isMail);
       if (isProjects) loadProjects();
+      if (isMail) loadMailWorkspace();
       if (isBpm) {
         const session = captureSession();
         saveActiveText();
@@ -4193,6 +5251,7 @@
     document.getElementById("menuProjects").addEventListener("click", () => switchMainView("projects"));
     document.getElementById("menuReport").addEventListener("click", () => switchMainView("report"));
     document.getElementById("menuBpm").addEventListener("click", () => switchMainView("bpm"));
+    document.getElementById("menuMail").addEventListener("click", () => switchMainView("mail"));
     document.getElementById("refreshProjects").addEventListener("click", () => loadProjects());
     projectSearch.addEventListener("input", () => {
       window.clearTimeout(projectSearchTimer);
@@ -4213,6 +5272,79 @@
     document.getElementById("refreshBpmJobs").addEventListener("click", () => {
       refreshBpmJobs();
       showToast("任务日志已刷新");
+    });
+
+    mailTemplateSearch.addEventListener("input", renderMailTemplates);
+    mailSubject.addEventListener("input", scheduleMailDraftSave);
+    mailBody.addEventListener("input", scheduleMailDraftSave);
+    document.getElementById("chooseMailRecipientFile").addEventListener("click", () => mailRecipientFile.click());
+    mailRecipientFile.addEventListener("change", () => parseMailRecipientFile(mailRecipientFile.files[0]));
+    document.getElementById("createMailTemplate").addEventListener("click", () => {
+      openMailTemplateDialog({ subject: mailSubject.value, body: mailBody.value });
+    });
+    document.getElementById("saveMailTemplate").addEventListener("click", async () => {
+      try {
+        await saveSelectedMailTemplate();
+      } catch (error) {
+        showToast(error.message || "模板更新失败");
+      }
+    });
+    document.getElementById("duplicateMailTemplate").addEventListener("click", () => {
+      const template = selectedMailTemplate();
+      if (template) openMailTemplateDialog({ name: `${template.name} 副本`, subject: mailSubject.value, body: mailBody.value });
+    });
+    document.getElementById("deleteMailTemplate").addEventListener("click", async () => {
+      const session = captureSession();
+      const template = selectedMailTemplate();
+      if (!template || !window.confirm(`确认删除模板“${template.name}”吗？历史发送记录不会受到影响。`)) return;
+      try {
+        const response = await apiFetch(`/api/mail/templates/${template.id}`, { method: "DELETE", session });
+        if (!response.ok) throw new Error(await responseError(response, "模板删除失败"));
+        mailState.templates = mailState.templates.filter((item) => item.id !== template.id);
+        mailState.selectedTemplateId = null;
+        renderMailTemplates();
+        scheduleMailDraftSave();
+        showToast("模板已删除");
+      } catch (error) {
+        if (isCurrentSession(session)) showToast(error.message || "模板删除失败");
+      }
+    });
+    mailTemplateForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const session = captureSession();
+      const button = document.getElementById("confirmMailTemplate");
+      button.disabled = true;
+      try {
+        const template = await createMailTemplateRecord({
+          name: mailTemplateNameInput.value.trim(),
+          subject: mailTemplateSubjectInput.value,
+          body: mailTemplateBodyInput.value
+        }, session);
+        if (!template || !isCurrentSession(session)) return;
+        mailState.selectedTemplateId = template.id;
+        mailSubject.value = template.subject;
+        mailBody.value = template.body;
+        renderMailTemplates();
+        renderMailVariables();
+        scheduleMailDraftSave();
+        mailTemplateDialog.close();
+        showToast("模板已保存");
+      } catch (error) {
+        if (isCurrentSession(session)) showToast(error.message || "模板保存失败");
+      } finally {
+        if (isCurrentSession(session)) button.disabled = false;
+      }
+    });
+    document.getElementById("closeMailTemplateDialog").addEventListener("click", () => mailTemplateDialog.close());
+    document.getElementById("cancelMailTemplate").addEventListener("click", () => mailTemplateDialog.close());
+    document.getElementById("previewMail").addEventListener("click", previewMailMessages);
+    document.getElementById("closeMailPreview").addEventListener("click", () => mailPreviewDialog.close());
+    document.getElementById("submitMail").addEventListener("click", submitMailBatch);
+    document.getElementById("refreshMailBatches").addEventListener("click", () => refreshMailBatches());
+    [mailPreviewDialog, mailTemplateDialog].forEach((dialog) => {
+      dialog.addEventListener("click", (event) => {
+        if (event.target === dialog) dialog.close();
+      });
     });
 
     saveBpmCredentials.addEventListener("click", async () => {
@@ -4762,6 +5894,7 @@
     loadCurrentUser();
     window.setInterval(() => {
       if (!workspace.hidden && !bpmView.hidden) refreshBpmJobs();
+      if (!workspace.hidden && !mailView.hidden) refreshMailBatches();
     }, 5000);
   </script>
 </body>

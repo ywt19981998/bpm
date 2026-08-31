@@ -74,6 +74,7 @@ STATIC_ASSETS = {
     "/": ("index.html", "text/html; charset=utf-8"),
     "/index.html": ("index.html", "text/html; charset=utf-8"),
     "/auth_session_generation.js": ("auth_session_generation.js", "application/javascript; charset=utf-8"),
+    "/mail_ui_helpers.js": ("mail_ui_helpers.js", "application/javascript; charset=utf-8"),
     "/vendor/lucide-0.468.0.min.js": (
         "vendor/lucide-0.468.0.min.js",
         "application/javascript; charset=utf-8",
