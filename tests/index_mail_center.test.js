@@ -118,6 +118,17 @@ test("failed batches can be retried with confirmation and a stable key", () => {
   assert.match(body, /`\/api\/mail\/batches\/\$\{batchId\}\/retry`/);
 });
 
+test("mail send and retry responses are ignored after the active user changes", () => {
+  for (const name of ["submitMailBatch", "retryMailBatch"]) {
+    const body = functionBody(name);
+    assert.match(body, /const session = captureSession\(\)/);
+    assert.match(
+      body,
+      /const response = await apiFetch\([\s\S]*?if \(!isCurrentSession\(session\)\) return;[\s\S]*?if \(!response\.ok\)/
+    );
+  }
+});
+
 test("mail helper extracts unique variables in document order", () => {
   const { extractTemplateVariables } = loadHelpers();
 

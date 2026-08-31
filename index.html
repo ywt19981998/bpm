@@ -4080,6 +4080,7 @@
         body: JSON.stringify(payload),
         session
       });
+      if (!isCurrentSession(session)) return null;
       if (!response.ok) throw new Error(await responseError(response, "模板保存失败"));
       const result = await response.json();
       if (!isCurrentSession(session)) return null;
@@ -4097,6 +4098,7 @@
         body: JSON.stringify({ name: template.name, subject: mailSubject.value, body: mailBody.value }),
         session
       });
+      if (!isCurrentSession(session)) return;
       if (!response.ok) throw new Error(await responseError(response, "模板更新失败"));
       const result = await response.json();
       if (!isCurrentSession(session)) return;
@@ -4114,6 +4116,7 @@
           body: JSON.stringify({ subject: mailSubject.value, body: mailBody.value, recipients: mailState.recipients }),
           session
         });
+        if (!isCurrentSession(session)) return;
         if (!response.ok) throw new Error(await responseError(response, "邮件预览失败"));
         const result = await response.json();
         if (!isCurrentSession(session)) return;
@@ -4162,6 +4165,7 @@
           }),
           session
         });
+        if (!isCurrentSession(session)) return;
         if (!response.ok) throw new Error(await responseError(response, "邮件任务创建失败"));
         mailState.pendingIdempotencyKey = null;
         showToast("邮件已加入发送队列");
@@ -4214,6 +4218,7 @@
       if (!currentUser || !isCurrentSession(session)) return;
       try {
         const response = await apiFetch("/api/mail/batches?limit=30", { cache: "no-store", session });
+        if (!isCurrentSession(session)) return;
         if (!response.ok) throw new Error(await responseError(response, "发送记录读取失败"));
         const result = await response.json();
         if (!isCurrentSession(session)) return;
@@ -4235,6 +4240,7 @@
           body: JSON.stringify({ confirmed: true }),
           session
         });
+        if (!isCurrentSession(session)) return;
         if (!response.ok) throw new Error(await responseError(response, "失败邮件重试失败"));
         delete mailState.retryIdempotencyKeys[batchId];
         showToast("失败邮件已加入重试队列");
@@ -5299,6 +5305,7 @@
       if (!template || !window.confirm(`确认删除模板“${template.name}”吗？历史发送记录不会受到影响。`)) return;
       try {
         const response = await apiFetch(`/api/mail/templates/${template.id}`, { method: "DELETE", session });
+        if (!isCurrentSession(session)) return;
         if (!response.ok) throw new Error(await responseError(response, "模板删除失败"));
         mailState.templates = mailState.templates.filter((item) => item.id !== template.id);
         mailState.selectedTemplateId = null;
